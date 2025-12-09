@@ -1,0 +1,17 @@
+[project]
+name = "flair-tractography"
+version = "0.1.0"
+description = "Flair tractography journal extension implementation."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "scilpy>=2.2.1",
+    "snakemake>=9.13.7",
+]
+
+[dependency-groups]
+dev = [
+    "ipython>=9.7.0",
+    "snakemake-logger-plugin-snkmt>=0.1.5",
+    "spython>=0.3.14",
+]
