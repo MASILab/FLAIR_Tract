@@ -13,7 +13,7 @@ OUT_FSLMATHS="$T1_DIR/T1_seed.nii.gz"
 OUT_GMWMI="$T1_DIR/T1_gmwmi.nii.gz"
 OUT_FSLMERGE="$T1_DIR/T1_tractseg.nii.gz"
 WML_DIR="$T1_DIR/wm_learning"
-THREADS=18
+THREADS=48
 
 export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS
 
@@ -21,7 +21,7 @@ apptainer run -e --contain --home "$T1_DIR" --bind "$T1_DIR":/INPUTS --bind "$T1
 "$RESOURCE_DIR/working_dir":/WORKING_DIR --bind /tmp:/tmp \
 --bind "$RESOURCE_DIR" "$UNEST" --w_skull 
 
-cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_2mm_seg.nii.gz" "$T1_DIR/T1_2mm_seg.nii.gz" || exit
+#cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm_seg.nii.gz" "$T1_DIR/T1_2pt2mm_seg.nii.gz" || exit
 cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_seg.nii.gz" "$T1_DIR/T1_seg.nii.gz" || exit
 
 fslmaths "$T1_DIR/T1_seg.nii.gz" -div "$T1_DIR/T1_seg.nii.gz" -fillh "$T1_DIR/T1_mask.nii.gz" -odt int || exit
@@ -52,9 +52,9 @@ fslmerge -t "$OUT_FSLMERGE" "$WML_DIR"/tractSeg/orig/*.nii.gz # without globbing
 apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsRegistrationSyN.sh -d 3 -m "$T1_DIR/T1_N4.nii.gz" -f "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c.nii.gz" -t r -o "$T1_DIR/mni_t1_" || exit
 mv "$T1_DIR/mni_t1_Warped.nii.gz" "$T1_DIR/T1_N4_mni_1mm.nii.gz"
 rm "$T1_DIR/mni_t1_InverseWarped.nii.gz"
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsRegistrationSyN.sh -d 3 -m "$T1_DIR/T1_N4.nii.gz" -f "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -t r -o "$T1_DIR/mni_t1_2mm_" || exit
-mv "$T1_DIR/mni_t1_2mm_Warped.nii.gz" "$T1_DIR/T1_N4_mni_2mm.nii.gz"
-rm "$T1_DIR/mni_t1_2mm_InverseWarped.nii.gz"
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsRegistrationSyN.sh -d 3 -m "$T1_DIR/T1_N4.nii.gz" -f "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -t r -o "$T1_DIR/mni_t1_2pt2mm_" || exit
+#mv "$T1_DIR/mni_t1_2pt2mm_Warped.nii.gz" "$T1_DIR/T1_N4_mni_2pt2mm.nii.gz"
+#rm "$T1_DIR/mni_t1_2pt2mm_InverseWarped.nii.gz"
 # ==========================================
 # TODO
 # MAKE SURE T12MNI IS GENERATED FOR 1mm
@@ -72,15 +72,15 @@ apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUM
 apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c.nii.gz" -i "$T1_DIR/T1_tractseg.nii.gz"  -t $T1_DIR/mni_t1_0GenericAffine.mat -o $T1_DIR/T1_tractseg_mni_1mm.nii.gz -n Linear
 # apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c.nii.gz" -i "$T1_DIR/T1_slant.nii.gz"  -t $T1_DIR/mni_t1_0GenericAffine.mat -o $T1_DIR/T1_slant_mni_1mm.nii.gz -n NearestNeighbor
 
-echo "prep_T1.sh: Moving images to MNI space at 2mm isotropic..."
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_N4.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_N4_mni_2mm.nii.gz" -n Linear
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_mask.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_mask_mni_2mm.nii.gz" -n NearestNeighbor
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_seed.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_seed_mni_2mm.nii.gz" -n NearestNeighbor -v || exit
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 3 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_5tt.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_5tt_mni_2mm.nii.gz" -n Linear
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_gmwmi.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_gmwmi_mni_2mm.nii.gz" -n Linear
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_seg.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_seg_mni_2mm.nii.gz" -n NearestNeighbor
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 3 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz" -i "$T1_DIR/T1_tractseg.nii.gz" -t "$T1_DIR/mni_t1_2mm_0GenericAffine.mat" -o "$T1_DIR/T1_tractseg_mni_2mm.nii.gz" -n Linear
+#echo "prep_T1.sh: Moving images to MNI space at 2pt2mm isotropic..."
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_N4.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_N4_mni_2pt2mm.nii.gz" -n Linear
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_mask.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_mask_mni_2pt2mm.nii.gz" -n NearestNeighbor
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_seed.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_seed_mni_2pt2mm.nii.gz" -n NearestNeighbor -v || exit
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 3 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_5tt.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_5tt_mni_2pt2mm.nii.gz" -n Linear
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_gmwmi.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_gmwmi_mni_2pt2mm.nii.gz" -n Linear
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 0 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_seg.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_seg_mni_2pt2mm.nii.gz" -n NearestNeighbor
+#apptainer exec -e --contain --bind "$RESOURCE_DIR" --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS" "$ANTS" antsApplyTransforms -d 3 -e 3 -r "$T1_DIR/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz" -i "$T1_DIR/T1_tractseg.nii.gz" -t "$T1_DIR/mni_t1_2pt2mm_0GenericAffine.mat" -o "$T1_DIR/T1_tractseg_mni_2pt2mm.nii.gz" -n Linear
 # Should FinalResults/<nested dir>/segmentation be used here?
-# antsApplyTransforms -d 3 -e 3 -r $T1_DIR/mni_icbm152_nlin_sym_09c/mni_icbm152_t1_tal_nlin_sym_09c_2mm.nii.gz -i $T1_DIR/T1_slant.nii.gz -t $T1_DIR/T12mni_0GenericAffine.mat -o $T1_DIR/T1_slant_mni_2mm.nii.gz -n NearestNeighbor
+# antsApplyTransforms -d 3 -e 3 -r $T1_DIR/mni_icbm152_nlin_sym_09c/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm.nii.gz -i $T1_DIR/T1_slant.nii.gz -t $T1_DIR/T12mni_0GenericAffine.mat -o $T1_DIR/T1_slant_mni_2pt2mm.nii.gz -n NearestNeighbor
 
 printf "%s\n" "T1 Processing Finished"

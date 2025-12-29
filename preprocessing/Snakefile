@@ -2,7 +2,9 @@ from pathlib import Path
 from snakemake.io import expand
 from snakemake.utils import listfiles
 
+
 configfile: "config.yaml"
+
 
 MRTRIX = config["containers"]["mrtrix"]
 Ants = config["containers"]["ants"]
@@ -13,7 +15,9 @@ model_ref = config["model_ref"]
 trk_atlas = config["trk_atlas"]
 
 BASE_DIR = Path(config["base_dir"])
+work_dir_base = BASE_DIR / "sub-{subject}" / "ses-{session}"
 DERIVATIVES = BASE_DIR.joinpath(config["deriv"])
+work_dir_derivatives = DERIVATIVES / "sub-{subject}" / "ses-{session}"
 T1_DIR = Path(config["t1_dir"])
 
 VALID_SUBJECT_SESSION_PAIRS = []
@@ -31,7 +35,7 @@ for sub_dir in BASE_DIR.glob("sub-*"):
             dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
             if dwi_files:
                 dwi_file = dwi_files[0]
-                dwi_stem = dwi_file.stem.replace('.nii', '')
+                dwi_stem = dwi_file.stem.replace(".nii", "")
                 bval_file = dwi_dir / f"{dwi_stem}.bval"
                 bvec_file = dwi_dir / f"{dwi_stem}.bvec"
                 if not bval_file.exists():
@@ -54,302 +58,109 @@ for subject, session in VALID_SUBJECT_SESSION_PAIRS:
     SESSION_MAP[subject].append(session)
 
 
-def get_all_resample_dwi_outputs(wildcards=None):
-    """Generate a list of target B0 files for rule all, only for valid subject-session pairs."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_2pt2.nii.gz",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_b0_outputs(wildcards=None):
-    """Generate a list of target B0 files for rule all, only for valid subject-session pairs."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_b0.nii.gz",
-        zip,  # Use zip to pair subjects and sessions correctly
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_affine_outputs(wildcards=None):
-    """Generate a list of target affine files for rule all, for valid subject-session pairs."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri2T1_0GenericAffine.mat",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_transformed_mask_outputs(wildcards=None):
-    """Generate a list of target transformed mask files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_mask.nii.gz",
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_seed.nii.gz",
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_5tt.nii.gz",
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_gmwmi.nii.gz"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_fod_outputs(wildcards=None):
-    """Generate a list of target FOD files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_tournier.txt",
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_fod.nii.gz"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_convert_transform_outputs(wildcards=None):
-    """Generate a list of target transform conversion files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_fod_mni_outputs(wildcards=None):
-    """Generate a list of target FOD MNI files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz",
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_convert_fod_to_signal_outputs(wildcards=None):
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri_sf_mni_trix.nii.gz",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_sdstreams_outputs(wildcards=None):
-    """Generate a list of target tractography files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_minlen_50.tck",
-        DERIVATIVES / "sub-{subject}/ses-{session}/SDStream_seeds.txt",
-        DERIVATIVES / "sub-{subject}/ses-{session}/parsed_SDStream_seeds.txt",
-        DERIVATIVES / "sub-{subject}/ses-{session}/SDStream_seeds.tck"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_tractogram_t1_outputs(wildcards=None):
-    """Generate a list of target tractogram T1 files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/T1_test50to250_no_remove.trk",
-        DERIVATIVES / "sub-{subject}/ses-{session}/T1_SDStream_seeds.trk",
-        DERIVATIVES / "sub-{subject}/ses-{session}/T1_test50to250.trk"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_tractogram_mni_outputs(wildcards=None):
-    """Generate a list of target tractogram MNI files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/T1_test50to250_mni_no_remove.trk",
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/T1_SDStream_seeds_mni.trk",
-        DERIVATIVES / "sub-{subject}/ses-{session}/T1_test50to250_mni.trk"
-    ], zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_tdi_outputs(wildcards=None):
-    """Generate a list of target TDI files for rule all."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES /
-        "sub-{subject}/ses-{session}/T1_test50to250_mni_tdi.nii.gz",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_model_to_sub_tfm_outputs(wildcards=None):
-    """Generate a list of target B0 files for rule all, only for valid subject-session pairs."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand(
-        DERIVATIVES / "bundleseg/model_to_sub_tfm.mat",
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-def get_all_bundleseg_outputs(wildcards=None):
-    """Generate a list of target B0 files for rule all, only for valid subject-session pairs."""
-    if not VALID_SUBJECT_SESSION_PAIRS:
-        return []
-
-    return expand([
-        DERIVATIVES / "sub-{subject}/ses-{session}/bundleseg/results.json",
-        DERIVATIVES / "sub-{subject}/ses-{session}/bundleseg/logfile.txt"
-    ],
-        zip,
-        subject=VALID_SUBJECTS,
-        session=VALID_SESSIONS
-    )
-
-
-d = {"resample_dwi_outputs": [
-    "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz"],
+d = {
+    "resample_dwi_outputs": ["sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz"],
     "compute_b0_outputs": ["sub-{subject}/ses-{session}/dwmri_b0.nii.gz"],
-    "register_b0_to_t1_outputs": ["sub-{subject}/ses-{session}/dwmri2T1_0GenericAffine.mat", "sub-{subject}/ses-{session}/dwmri2T1_Warped.nii.gz"],
-    "transform_masks_to_dwi_outputs": ["sub-{subject}/ses-{session}/dwmri_mask.nii.gz",
-                                       "sub-{subject}/ses-{session}/dwmri_seed.nii.gz",
-                                       "sub-{subject}/ses-{session}/dwmri_5tt.nii.gz",
-                                       "sub-{subject}/ses-{session}/dwmri_gmwmi.nii.gz"],
-    "fit_fod_outputs": ["sub-{subject}/ses-{session}/dwmri_tournier.txt",
-                        "sub-{subject}/ses-{session}/dwmri_fod.nii.gz"],
-    "convert_transform_to_mni_outputs": ["sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt"],
-
-
-
-
-
-
-
-    "transform_fod_to_mni_outputs": ["sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
-                                     "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz"],
-    "convert_fod_to_signal_outputs": ["sub-{subject}/ses-{session}/dwmri_sf_mni_trix.nii.gz"],
-    "run_tractography_outputs": ["sub-{subject}/ses-{session}/dwmri_minlen_50.tck",
-                                 "sub-{subject}/ses-{session}/SDStream_seeds.txt",
-                                 "sub-{subject}/ses-{session}/parsed_SDStream_seeds.txt",
-                                 "sub-{subject}/ses-{session}/SDStream_seeds.tck"],
-    "transform_tractograms_to_t1_output": ["sub-{subject}/ses-{session}/T1_test50to250_no_remove.trk",
-                                           "sub-{subject}/ses-{session}/T1_SDStream_seeds.trk",
-                                           "sub-{subject}/ses-{session}/T1_test50to250.trk"],
-    "transform_tractograms_to_mni_outputs": ["sub-{subject}/ses-{session}/T1_test50to250_mni_no_remove.trk",
-                                             "sub-{subject}/ses-{session}/T1_SDStream_seeds_mni.trk",
-                                             "sub-{subject}/ses-{session}/T1_test50to250_mni.trk"],
+    "register_b0_to_t1_outputs": [
+        "sub-{subject}/ses-{session}/dwmri2T1_0GenericAffine.mat",
+        "sub-{subject}/ses-{session}/dwmri2T1_Warped.nii.gz",
+    ],
+    "transform_masks_to_dwi_outputs": [
+        "sub-{subject}/ses-{session}/dwmri_mask.nii.gz",
+        "sub-{subject}/ses-{session}/dwmri_seed.nii.gz",
+        "sub-{subject}/ses-{session}/dwmri_5tt.nii.gz",
+        "sub-{subject}/ses-{session}/dwmri_gmwmi.nii.gz",
+    ],
+    "fit_fod_outputs": [
+        "sub-{subject}/ses-{session}/dwmri_tournier.txt",
+        "sub-{subject}/ses-{session}/dwmri_fod.nii.gz",
+    ],
+    "convert_transform_to_mni_outputs": [
+        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt"
+    ],
+    "transform_fod_to_mni_outputs": [
+        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
+        "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz",
+    ],
+    "convert_fod_to_signal_outputs": [
+        "sub-{subject}/ses-{session}/dwmri_sf_mni_trix.nii.gz"
+    ],
+    "run_tractography_outputs": [
+        "sub-{subject}/ses-{session}/dwmri_minlen_50.tck",
+        "sub-{subject}/ses-{session}/SDStream_seeds.txt",
+        "sub-{subject}/ses-{session}/parsed_SDStream_seeds.txt",
+        "sub-{subject}/ses-{session}/SDStream_seeds.tck",
+    ],
+    "transform_tractograms_to_t1_output": [
+        "sub-{subject}/ses-{session}/T1_test50to250_no_remove.trk",
+        "sub-{subject}/ses-{session}/T1_SDStream_seeds.trk",
+        "sub-{subject}/ses-{session}/T1_test50to250.trk",
+    ],
+    "transform_tractograms_to_mni_outputs": [
+        "sub-{subject}/ses-{session}/T1_test50to250_mni_no_remove.trk",
+        "sub-{subject}/ses-{session}/T1_SDStream_seeds_mni.trk",
+        "sub-{subject}/ses-{session}/T1_test50to250_mni.trk",
+    ],
     "compute_tdi_outputs": ["sub-{subject}/ses-{session}/T1_mni_tdi.nii.gz"],
-    "compute_model_to_sub_mat_outputs": ["sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm.mat"],
-    "bundleseg_outputs": ["sub-{subject}/ses-{session}/bundleseg/logfile.txt", "sub-{subject}/ses-{session}/bundleseg/results.json"]
+    "compute_model_to_sub_mat_outputs": [
+        "sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm.mat"
+    ],
+    "bundleseg_outputs": [
+        "sub-{subject}/ses-{session}/bundleseg/logfile.txt",
+        "sub-{subject}/ses-{session}/bundleseg/results.json",
+    ],
 }
 
 
-rule run_all:
-    for k in d.keys():
-        expand(d[k], zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
+# TODO: REFACTOR 
+def all_outputs(wildcards=False):
+    return [DERIVATIVES / p for k in d.keys() for p  in expand(d[k], zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)]
 
-
-# rule all:
-#     input:
-#         dwmri_resampled_files = get_all_resample_dwi_outputs(),
-#         b0_files = get_all_b0_outputs(),
-#         affine_files = get_all_affine_outputs(),
-#         mask_files = get_all_transformed_mask_outputs(),
-#         fod_files = get_all_fod_outputs(),
-#         transform_files = get_all_convert_transform_outputs(),
-#         fod_mni_files = get_all_fod_mni_outputs(),
-#         signal_files = get_convert_fod_to_signal_outputs(),
-#         tractography_files = get_sdstreams_outputs(),
-#         tract_to_t1_files = get_all_tractogram_t1_outputs(),
-#         tract_to_mni_files = get_all_tractogram_mni_outputs(),
-#         tdi_files = get_all_tdi_outputs(),
-#         mode_to_sub_tfm_files = get_all_model_to_sub_tfm_outputs(),
-#         bundleseg_files = get_all_bundleseg_outputs()
+rule all:
+    input:
+        all_out=all_outputs,
 
 
 def get_dwi_inputs(wildcards):
     """Get DWI input file for a specific subject-session"""
     # Validate that this is a valid pair
-    if wildcards.subject not in SESSION_MAP or wildcards.session not in SESSION_MAP[wildcards.subject]:
+    if (
+        wildcards.subject not in SESSION_MAP
+        or wildcards.session not in SESSION_MAP[wildcards.subject]
+    ):
         raise ValueError(
-            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}")
+            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}"
+        )
 
-    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" /
-    f"ses-{wildcards.session}" / "dwi"
+    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
     dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
     if dwi_files:
         return dwi_files[0]
     else:
         raise Exception(
-            f"No DWI files found for sub-{wildcards.subject} ses-{wildcards.session}")
+            f"No DWI files found for sub-{wildcards.subject} ses-{wildcards.session}"
+        )
 
 
 def get_associated_files(wildcards, suffix):
     """Get associated .bval or .bvec files"""
     # Validate that this is a valid pair
-    if wildcards.subject not in SESSION_MAP or wildcards.session not in SESSION_MAP[wildcards.subject]:
+    if (
+        wildcards.subject not in SESSION_MAP
+        or wildcards.session not in SESSION_MAP[wildcards.subject]
+    ):
         raise ValueError(
-            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}")
+            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}"
+        )
 
-    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" /
-    f"ses-{wildcards.session}" / "dwi"
+    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
     dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
     if not dwi_files:
         raise Exception(
-            f"No DWI files found for sub-{wildcards.subject} ses-{wildcards.session}")
+            f"No DWI files found for sub-{wildcards.subject} ses-{wildcards.session}"
+        )
 
-    dwi_stem = dwi_files[0].stem.replace('.nii', '')
+    dwi_stem = dwi_files[0].stem.replace(".nii", "")
     associated_file = dwi_dir / f"{dwi_stem}{suffix}"
 
     if not associated_file.exists():
@@ -357,22 +168,6 @@ def get_associated_files(wildcards, suffix):
         associated_file = dwi_dir / f"{alt_stem}{suffix}"
 
     return associated_file
-
-
-def work_dir_derivatives(wildcards):
-    # Validate pair
-    if wildcards.subject not in SESSION_MAP or wildcards.session not in SESSION_MAP[wildcards.subject]:
-        raise ValueError(
-            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}")
-    return DERIVATIVES / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}"
-
-
-def work_dir_base(wildcards):
-    # Validate pair
-    if wildcards.subject not in SESSION_MAP or wildcards.session not in SESSION_MAP[wildcards.subject]:
-        raise ValueError(
-            f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}")
-    return BASE_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}"
 
 
 def bval(wildcards):
@@ -384,35 +179,41 @@ def bvec(wildcards):
 
 
 def output_prefix(wildcards):
-    return DERIVATIVES / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwmri2T1_"
+    return (
+        DERIVATIVES
+        / f"sub-{wildcards.subject}"
+        / f"ses-{wildcards.session}"
+        / "dwmri2T1_"
+    )
 
 
 rule resample_dwmri:
     input:
-        dwi = get_dwi_inputs
+        dwi=get_dwi_inputs,
     output:
-        dwi_2pt2 = DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri_2pt2.nii.gz"
+        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz"
+        # expand(DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log"
+        # expand(DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
     shell:
         """
-            flirt -in {input.dwi} -out {output.dwi_2pt2} -applyisoxfm 2.2
+            flirt -in {input.dwi} -out {output} -applyisoxfm 1.0
         """
 
 
 rule compute_b0:
     input:
-        dwi = rule.resample_dwmri.output.dwi_2pt2,
-        bval = bval,
-        bvec = bvec
+        dwi=rules.resample_dwmri.output,
+        bval=bval,
+        bvec=bvec,
     output:
-        b0 = DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_b0.nii.gz"
+        b0=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_b0.nii.gz",
     params:
-        container = MRTRIX,
-        work_dir = work_dir_base
+        container=MRTRIX,
+        work_dir=work_dir_base,
     log:
-        DERIVATIVES / "logs/sub-{subject}/ses-{session}/compute_b0.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/compute_b0.log",
     container:
         MRTRIX
     shell:
@@ -428,24 +229,23 @@ rule compute_b0:
         {output.b0}) {params.container} mrmath - mean {output.b0} -axis 3 \\
         2>> {log}"""
 
+
 rule register_b0_to_t1:
     input:
-        b0 = rules.compute_b0.output.b0,
-        t1 = T1_DIR / template
+        b0=rules.compute_b0.output.b0,
+        t1=T1_DIR / template,
     output:
-        affine = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri2T1_0GenericAffine.mat",
+        affine=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri2T1_0GenericAffine.mat",
         # Temporary, will be removed
-        warped = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri2T1_Warped.nii.gz"
+        warped=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri2T1_Warped.nii.gz",
     params:
-        t1_dir = T1_DIR,
-        work_dir = work_dir_base,
-        output_prefix = output_prefix,
-        container = Ants,
-        itk_threads = itk_thread_count
+        t1_dir=T1_DIR,
+        work_dir=work_dir_base,
+        output_prefix=output_prefix,
+        container=Ants,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES / "logs/sub-{subject}/ses-{session}/register_t1_to_b0.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/register_t1_to_b0.log",
     container:
         Ants
     shell:
@@ -465,29 +265,24 @@ rule register_b0_to_t1:
 
 rule transform_masks_to_dwi:
     input:
-        b0 = rules.compute_b0.output.b0,
-        affine = rules.register_b0_to_t1.output.affine,
-        t1_mask = T1_DIR / "T1_mask.nii.gz",
-        t1_seed = T1_DIR / "T1_seed.nii.gz",
-        t1_5tt = T1_DIR / "T1_5tt.nii.gz",
-        t1_gmwmi = T1_DIR / "T1_gmwmi.nii.gz"
+        b0=rules.compute_b0.output.b0,
+        affine=rules.register_b0_to_t1.output.affine,
+        t1_mask=T1_DIR / "T1_mask.nii.gz",
+        t1_seed=T1_DIR / "T1_seed.nii.gz",
+        t1_5tt=T1_DIR / "T1_5tt.nii.gz",
+        t1_gmwmi=T1_DIR / "T1_gmwmi.nii.gz",
     output:
-        dwi_mask = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_mask.nii.gz",
-        dwi_seed = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_seed.nii.gz",
-        dwi_5tt = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_5tt.nii.gz",
-        dwi_gmwmi = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_gmwmi.nii.gz"
+        dwi_mask=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_mask.nii.gz",
+        dwi_seed=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_seed.nii.gz",
+        dwi_5tt=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_5tt.nii.gz",
+        dwi_gmwmi=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_gmwmi.nii.gz",
     params:
-        t1_dir = T1_DIR,
-        work_dir = work_dir_base,
-        container = Ants,
-        itk_threads = itk_thread_count
+        t1_dir=T1_DIR,
+        work_dir=work_dir_base,
+        container=Ants,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES /
-        "logs/sub-{subject}/ses-{session}/transform_masks_to_dwi.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/transform_masks_to_dwi.log",
     container:
         Ants
     shell:
@@ -529,23 +324,22 @@ rule transform_masks_to_dwi:
         -n Linear 2>> {log}
         """
 
+
 rule fit_fod:
     input:
-        dwi = rule.resample_dwmri.output.dwi_2pt2,
-        bval = bval,
-        bvec = bvec,
-        dwi_mask = rules.transform_masks_to_dwi.output.dwi_mask
+        dwi=rules.resample_dwmri.output,
+        bval=bval,
+        bvec=bvec,
+        dwi_mask=rules.transform_masks_to_dwi.output.dwi_mask,
     output:
-        response = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_tournier.txt",
-        fod = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_fod.nii.gz"
+        response=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_tournier.txt",
+        fod=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_fod.nii.gz",
     params:
-        work_dir = work_dir_derivatives,
-        container = MRTRIX,
-        itk_threads = itk_thread_count
+        work_dir=work_dir_derivatives,
+        container=MRTRIX,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES / "logs/sub-{subject}/ses-{session}/fit_fod.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/fit_fod.log",
     container:
         MRTRIX
     shell:
@@ -570,19 +364,18 @@ rule fit_fod:
         -mask {input.dwi_mask} 2>> {log}
         """
 
+
 rule convert_transform_to_mni:
     input:
-        dwi2t1_affine = rules.register_b0_to_t1.output.affine
+        dwi2t1_affine=rules.register_b0_to_t1.output.affine,
     output:
-        dwi2mni_txt = DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
+        dwi2mni_txt=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
     params:
-        work_dir = work_dir_derivatives,
-        container = Ants,
-        itk_threads = itk_thread_count
+        work_dir=work_dir_derivatives,
+        container=Ants,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES /
-        "logs/sub-{subject}/ses-{session}/convert_transform_to_mni.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/convert_transform_to_mni.log",
     container:
         Ants
     shell:
@@ -602,21 +395,18 @@ rule convert_transform_to_mni:
 
 rule transform_fod_to_mni:
     input:
-        fod = rules.fit_fod.output.fod,
-        mni_template = T1_DIR / template,
-        dwi2mni_txt = rules.convert_transform_to_mni.output.dwi2mni_txt
+        fod=rules.fit_fod.output.fod,
+        mni_template=T1_DIR / template,
+        dwi2mni_txt=rules.convert_transform_to_mni.output.dwi2mni_txt,
     output:
-        dwi2mni_trix = DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
-        fod_mni = DERIVATIVES /
-        "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz"
+        dwi2mni_trix=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
+        fod_mni=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz",
     params:
-        work_dir = work_dir_derivatives,
-        container = MRTRIX,
-        itk_threads = itk_thread_count
+        work_dir=work_dir_derivatives,
+        container=MRTRIX,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES /
-        "logs/sub-{subject}/ses-{session}/transform_fod_to_mni.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/transform_fod_to_mni.log",
     container:
         MRTRIX
     shell:
@@ -650,47 +440,44 @@ rule transform_fod_to_mni:
         {output.fod_mni}
         """
 
+
 rule convert_fod_to_signal:
     input:
-        fod_mni = rules.transform_fod_to_mni.output.fod_mni
+        fod_mni=rules.transform_fod_to_mni.output.fod_mni,
     output:
-        sf_mni = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_sf_mni_trix.nii.gz"
+        sf_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_sf_mni_trix.nii.gz",
     params:
-        work_dir = work_dir_derivatives
+        work_dir=work_dir_derivatives,
     shell:
         """
         scil_sh_to_sf --sh_basis tournier07 --sphere repulsion100 \\
         {input.fod_mni} {output.sf_mni}
         """
 
+
 rule run_tractography:
     input:
-        fod = rules.fit_fod.output.fod,
+        fod=rules.fit_fod.output.fod,
         # fod = rules.transform_fod_to_mni.output.fod_mni,
-        dwi_mask = rules.transform_masks_to_dwi.output.dwi_mask,
+        dwi_mask=rules.transform_masks_to_dwi.output.dwi_mask,
         # t1_mask = T1_DIR / "T1_mask.nii.gz",
         # t1_gmwmi = T1_DIR / "T1_gmwmi.nii.gz",
-        dwi_gmwmi = rules.transform_masks_to_dwi.output.dwi_gmwmi,
+        dwi_gmwmi=rules.transform_masks_to_dwi.output.dwi_gmwmi,
         # t1_mask = T1_DIR / template,
-        dwi_seed = rules.transform_masks_to_dwi.output.dwi_seed,
+        dwi_seed=rules.transform_masks_to_dwi.output.dwi_seed,
         # t1_5tt = T1_DIR / "T1_5tt.nii.gz",
-        dwi_5tt = rules.transform_masks_to_dwi.output.dwi_5tt
+        dwi_5tt=rules.transform_masks_to_dwi.output.dwi_5tt,
     output:
-        tck = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "dwmri_minlen_50.tck",
-        seeds_txt = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "SDStream_seeds.txt",
-        seeds_parsed = DERIVATIVES /
-        "sub-{subject}" / "ses-{session}" / "parsed_SDStream_seeds.txt",
-        seeds_tck = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "SDStream_seeds.tck"
+        tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_minlen_50.tck",
+        seeds_txt=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.txt",
+        seeds_parsed=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "parsed_SDStream_seeds.txt",
+        seeds_tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.tck",
     params:
-        work_dir = work_dir_derivatives,
-        container = MRTRIX,
-        itk_threads = itk_thread_count
+        work_dir=work_dir_derivatives,
+        container=MRTRIX,
+        itk_threads=itk_thread_count,
     log:
-        DERIVATIVES / "logs/sub-{subject}/ses-{session}/run_tractography.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/run_tractography.log",
     container:
         MRTRIX
     shell:
@@ -732,22 +519,20 @@ rule run_tractography:
         fi
         """
 
+
 rule transform_tractograms_to_t1:
     input:
-        b0 = rules.compute_b0.output.b0,
-        tck = rules.run_tractography.output.tck,
-        seeds_tck = rules.run_tractography.output.seeds_tck,
-        t1_n4 = T1_DIR / "T1_N4.nii.gz",
-        dwi2t1_affine = rules.register_b0_to_t1.output.affine
+        b0=rules.compute_b0.output.b0,
+        tck=rules.run_tractography.output.tck,
+        seeds_tck=rules.run_tractography.output.seeds_tck,
+        t1_n4=T1_DIR / "T1_N4.nii.gz",
+        dwi2t1_affine=rules.register_b0_to_t1.output.affine,
     output:
-        tck_t1_no_remove = DERIVATIVES / "sub-{subject}" / "ses-{session}" /
-        "T1_test50to250_no_remove.trk",
-        seeds_t1 = DERIVATIVES / "sub-{subject}" / "ses-{session}" /
-        "T1_SDStream_seeds.trk",
-        tck_t1 = DERIVATIVES / "sub-{subject}" / "ses-{session}" /
-        "T1_test50to250.trk"
+        tck_t1_no_remove=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_no_remove.trk",
+        seeds_t1=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_SDStream_seeds.trk",
+        tck_t1=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250.trk",
     params:
-        work_dir = work_dir_base
+        work_dir=work_dir_base,
     shell:
         """
         # Transform main tractogram to T1 space (no removal)
@@ -766,22 +551,19 @@ rule transform_tractograms_to_t1:
         --remove_invalid
         """
 
+
 rule transform_tractograms_to_mni:
     input:
-        tck_t1 = rules.transform_tractograms_to_t1.output.tck_t1,
-        seeds_t1 = rules.transform_tractograms_to_t1.output.seeds_t1,
-        t1_n4_mni = T1_DIR / "T1_N4_mni.nii.gz",
-        t12mni_affine = T1_DIR / "mni_t1_0GenericAffine.mat"
+        tck_t1=rules.transform_tractograms_to_t1.output.tck_t1,
+        seeds_t1=rules.transform_tractograms_to_t1.output.seeds_t1,
+        t1_n4_mni=T1_DIR / "T1_N4_mni_1mm.nii.gz",
+        t12mni_affine=T1_DIR / "mni_t1_0GenericAffine.mat",
     output:
-        tck_mni_no_remove = DERIVATIVES /
-        "sub-{subject}" / "ses-{session}" /
-        "T1_test50to250_mni_no_remove.trk",
-        seeds_mni = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "T1_SDStream_seeds_mni.trk",
-        tck_mni = DERIVATIVES / "sub-{subject}" /
-        "ses-{session}" / "T1_test50to250_mni.trk"
+        tck_mni_no_remove=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_mni_no_remove.trk",
+        seeds_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_SDStream_seeds_mni.trk",
+        tck_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_mni.trk",
     params:
-        work_dir = work_dir_base
+        work_dir=work_dir_base,
     shell:
         """
         # Transform main tractogram to MNI space (no removal)
@@ -800,14 +582,14 @@ rule transform_tractograms_to_mni:
             {output.tck_mni} --inverse --remove_invalid
         """
 
+
 rule compute_tdi:
     input:
-        tck_mni = rules.transform_tractograms_to_mni.output.tck_mni
+        tck_mni=rules.transform_tractograms_to_mni.output.tck_mni,
     output:
-        tdi = DERIVATIVES / "sub-{subject}" / "ses-{session}" /
-        "T1_test50to250_mni_tdi.nii.gz"
+        tdi=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_mni_tdi.nii.gz",  # "T1_test50to250_mni_tdi.nii.gz",
     params:
-        work_dir = work_dir_base
+        work_dir=work_dir_base,
     shell:
         """
         scil_tractogram_compute_density_map \\
@@ -817,14 +599,14 @@ rule compute_tdi:
 
 rule compute_model_to_sub_mat:
     input:
-        b0 = rules.compute_b0.output.b0,
-        model_ref = model_ref
+        b0=rules.compute_b0.output.b0,
+        model_ref=model_ref,
     output:
-        mat = work_dir_derivatives / "bundleseg/model_to_sub_tfm.mat"
+        mat=work_dir_derivatives / "bundleseg/model_to_sub_tfm.mat",
     params:
-        work_dir = work_dir_derivatives,
-        container = Ants,
-        itk_threads = itk_thread_count
+        work_dir=work_dir_derivatives,
+        container=Ants,
+        itk_threads=itk_thread_count,
     container:
         Ants
     shell:
@@ -838,16 +620,15 @@ rule compute_model_to_sub_mat:
 
 rule bundleseg:
     input:
-        tck = rules.run_tractography.output.tck,
-        trk_atlas = trk_atlas,
-        config = bsconfig,
-        model_to_subj_tfm = rule.compute_model_to_sub_mat.out.mat
+        tck=rules.run_tractography.output.tck,
+        trk_atlas=trk_atlas,
+        config=bsconfig,
+        model_to_subj_tfm=rules.compute_model_to_sub_mat.output.mat,
     output:
-        logfle = work_dir_derivatives / "bundleseg/logfile.txt",
-        results = work_dir_derivatives / "bundleseg/results.json"
+        logfle=work_dir_derivatives / "bundleseg/logfile.txt",
+        results=work_dir_derivatives / "bundleseg/results.json",
     params:
-        work_dir = work_dir_derivatives
-
+        work_dir=work_dir_derivatives,
     shell:
         """
         scil_tractogram_segment_with_bundleseg {input.tck} {input.bsconfig} \\
