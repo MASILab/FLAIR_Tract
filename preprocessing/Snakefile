@@ -11,6 +11,8 @@ Ants = config["containers"]["ants"]
 itk_thread_count = config["itk_threads"]
 template = config["mni_template"]
 bsconfig = config["bsconfig"]
+bsbase = config["bsbase"]
+bsmask = config["bsmask"]
 model_ref = config["model_ref"]
 trk_atlas = config["trk_atlas"]
 base_dir = config["base_dir"]
@@ -650,11 +652,13 @@ rule compute_model_to_sub_mat:
         base_dir = base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
+        bsmask = bsmask
+
     container:
         Ants
     shell:
         """
-        apptainer exec -c -e -B {params.base_dir} --env \\
+        apptainer exec -c -e -B {params.base_dir} -B {params.bsmask} --env \\
         "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsRegistrationSyN.sh  -d 3 -m {input.model_ref} \\
         -f {input.b0} -t a -n 4 -o {output.mat}
