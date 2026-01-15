@@ -516,7 +516,7 @@ rule run_tractography:
         mkdir -p $(dirname {log})
 
         # Run tractography with proper logging
-        apptainer exec -B {para--env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
+        apptainer exec -B {params.base_dir} --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} tckgen {input.fod} {output.tck} \\
         -algorithm SD_Stream -select 1000000 -step .1 -seed_image \\
         {input.dwi_seed} -seed_gmwmi {input.dwi_gmwmi} -crop_at_gmwmi \\
@@ -654,7 +654,7 @@ rule compute_model_to_sub_mat:
         Ants
     shell:
         """
-        apptainer exec -c -e  --env \\
+        apptainer exec -c -e -B {params.base_dir} --env \\
         "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsRegistrationSyN.sh  -d 3 -m {input.model_ref} \\
         -f {input.b0} -t a -n 4 -o {output.mat}
