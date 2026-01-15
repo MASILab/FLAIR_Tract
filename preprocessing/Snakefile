@@ -13,16 +13,17 @@ template = config["mni_template"]
 bsconfig = config["bsconfig"]
 model_ref = config["model_ref"]
 trk_atlas = config["trk_atlas"]
+base_dir = config["base_dir"]
 
-BASE_DIR = Path(config["base_dir"])
-work_dir_base = BASE_DIR / "sub-{subject}" / "ses-{session}"
-DERIVATIVES = BASE_DIR.joinpath(config["deriv"])
-work_dir_derivatives = DERIVATIVES / "sub-{subject}" / "ses-{session}"
+BIDS_DIR = Path(config["bids_dir"])
+# work_dir_base =  BIDS_DIR / "sub-{subject}" / "ses-{session}"
+DERIVATIVES = BIDS_DIR.joinpath(config["deriv"])
+# work_dir_derivatives = DERIVATIVES / "sub-{subject}" / "ses-{session}"
 T1_DIR = Path(config["t1_dir"])
 
 VALID_SUBJECT_SESSION_PAIRS = []
 
-for sub_dir in BASE_DIR.glob("sub-*"):
+for sub_dir in BIDS_DIR.glob("sub-*"):
     if not sub_dir.is_dir():
         continue
     subject = sub_dir.name.split("sub-")[1]
@@ -30,11 +31,12 @@ for sub_dir in BASE_DIR.glob("sub-*"):
         if not ses_dir.is_dir():
             continue
         session = ses_dir.name.split("ses-")[1]
-        dwi_dir = ses_dir / "dwi"
-        if dwi_dir.exists():
-            dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
+        dwi_base = ses_dir / "dwi"
+        if dwi_base.exists():
+            dwi_files = list(dwi_base.rglob("*/dwmri.nii.gz"))
             if dwi_files:
                 dwi_file = dwi_files[0]
+                dwi_dir = dwi_file.parent
                 dwi_stem = dwi_file.stem.replace(".nii", "")
                 bval_file = dwi_dir / f"{dwi_stem}.bval"
                 bvec_file = dwi_dir / f"{dwi_stem}.bvec"
@@ -56,7 +58,6 @@ for subject, session in VALID_SUBJECT_SESSION_PAIRS:
     if subject not in SESSION_MAP:
         SESSION_MAP[subject] = []
     SESSION_MAP[subject].append(session)
-
 
 d = {
     "resample_dwi_outputs": ["sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz"],
@@ -112,9 +113,14 @@ d = {
 }
 
 
-# TODO: REFACTOR 
+# TODO: REFACTOR
 def all_outputs(wildcards=False):
-    return [DERIVATIVES / p for k in d.keys() for p  in expand(d[k], zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)]
+    return [
+        DERIVATIVES / p
+        for k in d.keys()
+        for p in expand(d[k], zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
+    ]
+
 
 rule all:
     input:
@@ -132,7 +138,10 @@ def get_dwi_inputs(wildcards):
             f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}"
         )
 
-    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
+    dwi_base = (
+        BIDS_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
+    )
+    dwi_dir = list(dwi_base.rglob("*/dwmri.nii.gz"))[0].parent
     dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
     if dwi_files:
         return dwi_files[0]
@@ -153,7 +162,10 @@ def get_associated_files(wildcards, suffix):
             f"Invalid subject-session pair: sub-{wildcards.subject}/ses-{wildcards.session}"
         )
 
-    dwi_dir = BASE_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
+    dwi_base = (
+        BIDS_DIR / f"sub-{wildcards.subject}" / f"ses-{wildcards.session}" / "dwi"
+    )
+    dwi_dir = list(dwi_base.rglob("*/dwmri.nii.gz"))[0].parent
     dwi_files = list(dwi_dir.glob("dwmri.nii.gz"))
     if not dwi_files:
         raise Exception(
@@ -191,14 +203,16 @@ rule resample_dwmri:
     input:
         dwi=get_dwi_inputs,
     output:
-        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz"
+        DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz",
         # expand(DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
     log:
-        DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log"
+        DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log",
         # expand(DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
+    params:
+        ref=template,
     shell:
         """
-            flirt -in {input.dwi} -out {output} -applyisoxfm 1.0
+            flirt -in {input.dwi} -ref {params.ref} -out {output} -applyisoxfm 1.0
         """
 
 
@@ -210,8 +224,8 @@ rule compute_b0:
     output:
         b0=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_b0.nii.gz",
     params:
+        base_dir = base_dir,
         container=MRTRIX,
-        work_dir=work_dir_base,
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/compute_b0.log",
     container:
@@ -223,11 +237,13 @@ rule compute_b0:
         mkdir -p $(dirname {log})
 
         # Run pipeline with proper logging
-        singularity exec -B {params.work_dir} -B $(dirname {output.b0}) \\
+        apptainer exec -ce -B /tmp -B {params.base_dir} -B $(dirname {output.b0}) \\
         {params.container} dwiextract {input.dwi} -fslgrad {input.bvec} \\
-        {input.bval} - -bzero 2>> {log} | singularity exec -B $(dirname \\
-        {output.b0}) {params.container} mrmath - mean {output.b0} -axis 3 \\
-        2>> {log}"""
+        {input.bval} - -bzero 2>> {log} | apptainer exec -ce -B /tmp -B {params.base_dir} -B $(dirname \\
+        {output.b0}) {params.container} mrmath -in - mean {output.b0} -axis 3 \\
+        2>> {log}
+
+        """
 
 
 rule register_b0_to_t1:
@@ -235,12 +251,18 @@ rule register_b0_to_t1:
         b0=rules.compute_b0.output.b0,
         t1=T1_DIR / template,
     output:
-        affine=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri2T1_0GenericAffine.mat",
+        affine=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "dwmri2T1_0GenericAffine.mat",
         # Temporary, will be removed
-        warped=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri2T1_Warped.nii.gz",
+        warped=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "dwmri2T1_Warped.nii.gz",
     params:
+        base_dir = base_dir,
         t1_dir=T1_DIR,
-        work_dir=work_dir_base,
         output_prefix=output_prefix,
         container=Ants,
         itk_threads=itk_thread_count,
@@ -255,7 +277,7 @@ rule register_b0_to_t1:
         mkdir -p $(dirname {log})
 
         # Run registration with proper logging
-        singularity exec -ce -B {params.work_dir} -B {params.t1_dir} \\
+        apptainer exec -ce -B {params.base_dir} -B {params.t1_dir} \\
         -B $(dirname {output.affine}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsRegistrationSyN.sh -d 3 -m {input.b0} \\
@@ -278,7 +300,7 @@ rule transform_masks_to_dwi:
         dwi_gmwmi=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_gmwmi.nii.gz",
     params:
         t1_dir=T1_DIR,
-        work_dir=work_dir_base,
+        base_dir=base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
     log:
@@ -292,7 +314,7 @@ rule transform_masks_to_dwi:
         mkdir -p $(dirname {log})
 
         # Transform brain mask
-        singularity exec -ce -B {params.work_dir} -B {params.t1_dir} \\
+        apptainer exec -ce -B {params.base_dir} -B {params.t1_dir} \\
         -B $(dirname {output.dwi_mask}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsApplyTransforms -d 3 -e 0 -r {input.b0} \\
@@ -300,7 +322,7 @@ rule transform_masks_to_dwi:
         -n NearestNeighbor 2>> {log}
 
         # Transform seed mask
-        singularity exec -ce -B {params.work_dir} -B {params.t1_dir} \\
+        apptainer exec -ce -B {params.base_dir} -B {params.t1_dir} \\
         -B $(dirname {output.dwi_seed}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsApplyTransforms -d 3 -e 0 -r {input.b0} \\
@@ -308,7 +330,7 @@ rule transform_masks_to_dwi:
         -n NearestNeighbor 2>> {log}
 
         # Transform 5tt image
-        singularity exec -ce -B {params.work_dir} -B {params.t1_dir} \\
+        apptainer exec -ce -B {params.base_dir} -B {params.t1_dir} \\
         -B $(dirname {output.dwi_5tt}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsApplyTransforms -d 3 -e 3 -r {input.b0} \\
@@ -316,7 +338,7 @@ rule transform_masks_to_dwi:
         -n Linear 2>> {log}
 
         # Transform GM-WM interface
-        singularity exec -ce -B {params.work_dir} -B {params.t1_dir} \\
+        apptainer exec -ce -B {params.base_dir} -B {params.t1_dir} \\
         -B $(dirname {output.dwi_gmwmi}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsApplyTransforms -d 3 -e 0 -r {input.b0} \\
@@ -335,7 +357,7 @@ rule fit_fod:
         response=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_tournier.txt",
         fod=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_fod.nii.gz",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
     log:
@@ -349,7 +371,7 @@ rule fit_fod:
         mkdir -p $(dirname {log})
 
         # Fit response function
-        singularity exec -B {params.work_dir} -B $(dirname {input.dwi}) \\
+        apptainer exec -B {params.base_dir} -B $(dirname {input.dwi}) \\
         -B $(dirname {output.response}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} dwi2response tournier {input.dwi} \\
@@ -357,7 +379,7 @@ rule fit_fod:
         -mask {input.dwi_mask} 2>> {log}
 
         # Fit FOD
-        singularity exec -B {params.work_dir} -B $(dirname {input.dwi}) \\
+        apptainer exec -B {params.base_dir} -B $(dirname {input.dwi}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} dwi2fod csd {input.dwi} {output.response} \\
         {output.fod} -fslgrad {input.bvec} {input.bval} \\
@@ -369,9 +391,10 @@ rule convert_transform_to_mni:
     input:
         dwi2t1_affine=rules.register_b0_to_t1.output.affine,
     output:
-        dwi2mni_txt=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
+        dwi2mni_txt=DERIVATIVES
+        / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
     log:
@@ -385,7 +408,7 @@ rule convert_transform_to_mni:
         mkdir -p $(dirname {log})
 
         # Convert DWI-to-T1 affine transform to text format
-        singularity exec -B {params.work_dir} \\
+        apptainer exec -B {params.base_dir} \\
         -B $(dirname {input.dwi2t1_affine}) -B $(dirname {output.dwi2mni_txt}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} ConvertTransformFile 3 {input.dwi2t1_affine} \\
@@ -399,10 +422,11 @@ rule transform_fod_to_mni:
         mni_template=T1_DIR / template,
         dwi2mni_txt=rules.convert_transform_to_mni.output.dwi2mni_txt,
     output:
-        dwi2mni_trix=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
+        dwi2mni_trix=DERIVATIVES
+        / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
         fod_mni=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_fod_mni_trix.nii.gz",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
     log:
@@ -416,7 +440,7 @@ rule transform_fod_to_mni:
         mkdir -p $(dirname {output.dwi2mni_trix})
         mkdir -p $(dirname {log})
         # Convert text transform to MRtrix format - FIX: use input.dwi2mni_txt not output
-        singularity exec -B {params.work_dir} -B $(dirname {input.dwi2mni_txt}) \\
+        apptainer exec -B {params.base_dir} -B $(dirname {input.dwi2mni_txt}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} transformconvert {input.dwi2mni_txt} \\
         itk_import {output.dwi2mni_trix} 2>> {log} #noqa
@@ -424,14 +448,14 @@ rule transform_fod_to_mni:
         # 52 is split into two separate commands below.
 
         # Transform FOD to MNI space with proper reorientation
-        singularity exec -B {params.work_dir} -B $(dirname {input.fod}) \\
+        apptainer exec -B {params.base_dir} -B $(dirname {input.fod}) \\
         -B $(dirname {input.mni_template}) -B $(dirname {output.fod_mni}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} mrtransform {input.fod} \\
         -linear {output.dwi2mni_trix} -template {input.mni_template} \\
         -interp linear -modulate fod -reorient_fod true {output.fod_mni}
 
-        singularity exec -B {params.work_dir} \\
+        apptainer exec -B {params.base_dir} \\
         -B $(dirname {input.mni_template}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} mrtransform -linear {output.dwi2mni_trix} \\
@@ -445,9 +469,12 @@ rule convert_fod_to_signal:
     input:
         fod_mni=rules.transform_fod_to_mni.output.fod_mni,
     output:
-        sf_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_sf_mni_trix.nii.gz",
+        sf_mni=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "dwmri_sf_mni_trix.nii.gz",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
     shell:
         """
         scil_sh_to_sf --sh_basis tournier07 --sphere repulsion100 \\
@@ -461,8 +488,7 @@ rule run_tractography:
         # fod = rules.transform_fod_to_mni.output.fod_mni,
         dwi_mask=rules.transform_masks_to_dwi.output.dwi_mask,
         # t1_mask = T1_DIR / "T1_mask.nii.gz",
-        # t1_gmwmi = T1_DIR / "T1_gmwmi.nii.gz",
-        dwi_gmwmi=rules.transform_masks_to_dwi.output.dwi_gmwmi,
+        # t1_gmwmi = T1_DIR /_gmwmi=rules.transform_masks_to_dwi.output.dwi_gmwmi,
         # t1_mask = T1_DIR / template,
         dwi_seed=rules.transform_masks_to_dwi.output.dwi_seed,
         # t1_5tt = T1_DIR / "T1_5tt.nii.gz",
@@ -470,10 +496,13 @@ rule run_tractography:
     output:
         tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_minlen_50.tck",
         seeds_txt=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.txt",
-        seeds_parsed=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "parsed_SDStream_seeds.txt",
+        seeds_parsed=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "parsed_SDStream_seeds.txt",
         seeds_tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.tck",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
     log:
@@ -487,10 +516,9 @@ rule run_tractography:
         mkdir -p $(dirname {log})
 
         # Run tractography with proper logging
-        singularity exec -B {params.work_dir} \\
-        --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
+        apptainer exec -B {para--env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} tckgen {input.fod} {output.tck} \\
-        -algorithm SD_Stream -select 1000000 -step .22 -seed_image \\
+        -algorithm SD_Stream -select 1000000 -step .1 -seed_image \\
         {input.dwi_seed} -seed_gmwmi {input.dwi_gmwmi} -crop_at_gmwmi \\
         -mask {input.dwi_mask} -minlength 50 -act {input.dwi_5tt} \\
         -output_seeds {output.seeds_txt} -info -force 2>> {log}
@@ -506,7 +534,7 @@ rule run_tractography:
         fi
 
         # Convert to TCK format with proper bind mounts
-        singularity exec -B {params.work_dir} \\
+        apptainer exec -B {params.base_dir} \\
         -B $(dirname {output.seeds_parsed}) -B $(dirname {output.seeds_tck}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} tckconvert {output.seeds_parsed} \\
@@ -528,11 +556,17 @@ rule transform_tractograms_to_t1:
         t1_n4=T1_DIR / "T1_N4.nii.gz",
         dwi2t1_affine=rules.register_b0_to_t1.output.affine,
     output:
-        tck_t1_no_remove=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_no_remove.trk",
-        seeds_t1=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_SDStream_seeds.trk",
+        tck_t1_no_remove=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "T1_test50to250_no_remove.trk",
+        seeds_t1=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "T1_SDStream_seeds.trk",
         tck_t1=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250.trk",
     params:
-        work_dir=work_dir_base,
+        base_dir=base_dir,
     shell:
         """
         # Transform main tractogram to T1 space (no removal)
@@ -559,11 +593,20 @@ rule transform_tractograms_to_mni:
         t1_n4_mni=T1_DIR / "T1_N4_mni_1mm.nii.gz",
         t12mni_affine=T1_DIR / "mni_t1_0GenericAffine.mat",
     output:
-        tck_mni_no_remove=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_mni_no_remove.trk",
-        seeds_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_SDStream_seeds_mni.trk",
-        tck_mni=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250_mni.trk",
+        tck_mni_no_remove=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "T1_test50to250_mni_no_remove.trk",
+        seeds_mni=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "T1_SDStream_seeds_mni.trk",
+        tck_mni=DERIVATIVES
+        / "sub-{subject}"
+        / "ses-{session}"
+        / "T1_test50to250_mni.trk",
     params:
-        work_dir=work_dir_base,
+        base_dir=base_dir,
     shell:
         """
         # Transform main tractogram to MNI space (no removal)
@@ -589,7 +632,7 @@ rule compute_tdi:
     output:
         tdi=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_mni_tdi.nii.gz",  # "T1_test50to250_mni_tdi.nii.gz",
     params:
-        work_dir=work_dir_base,
+        base_dir=base_dir,
     shell:
         """
         scil_tractogram_compute_density_map \\
@@ -602,9 +645,9 @@ rule compute_model_to_sub_mat:
         b0=rules.compute_b0.output.b0,
         model_ref=model_ref,
     output:
-        mat=work_dir_derivatives / "bundleseg/model_to_sub_tfm.mat",
+        mat = DERIVATIVES / "sub-{subject}"/ "ses-{session}" / "bundleseg/model_to_sub_tfm.mat",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
     container:
@@ -612,7 +655,7 @@ rule compute_model_to_sub_mat:
     shell:
         """
         apptainer exec -c -e  --env \\
-        "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_thread_count}" \\
+        "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsRegistrationSyN.sh  -d 3 -m {input.model_ref} \\
         -f {input.b0} -t a -n 4 -o {output.mat}
         """
@@ -625,14 +668,14 @@ rule bundleseg:
         config=bsconfig,
         model_to_subj_tfm=rules.compute_model_to_sub_mat.output.mat,
     output:
-        logfle=work_dir_derivatives / "bundleseg/logfile.txt",
-        results=work_dir_derivatives / "bundleseg/results.json",
+        logfle = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/logfile.txt",
+        results = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/results.json",
     params:
-        work_dir=work_dir_derivatives,
+        base_dir = base_dir,
     shell:
         """
-        scil_tractogram_segment_with_bundleseg {input.tck} {input.bsconfig} \\
+        scil_tractogram_segment_with_bundleseg {input.tck} {input.config} \\
         {input.trk_atlas}/* {input.model_to_subj_tfm} \\
-        --out_dir {params.work_dir}/bundleseg -v DEBUG --minimal_vote 0.4 \\
+        --out_dir {params.base_dir}/bundleseg -v DEBUG --minimal_vote 0.4 \\
         --processes 8 --seed 0 --exploration_mode -f
         """
