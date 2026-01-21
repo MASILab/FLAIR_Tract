@@ -105,9 +105,8 @@ d = {
         "sub-{subject}/ses-{session}/T1_test50to250_mni.trk",
     ],
     "compute_tdi_outputs": ["sub-{subject}/ses-{session}/T1_mni_tdi.nii.gz"],
-    "compute_model_to_sub_mat_outputs": [
-        "sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm.mat"
-    ],
+    # "compute_model_to_sub_mat_outputs": [ "sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm.mat" ],
+    "compute_model_to_sub_mat_outputs": ["sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm0GenericAffine.mat"],
     "bundleseg_outputs": [
         "sub-{subject}/ses-{session}/bundleseg/logfile.txt",
         "sub-{subject}/ses-{session}/bundleseg/results.json",
@@ -204,9 +203,12 @@ def output_prefix(wildcards):
 rule resample_dwmri:
     input:
         dwi=get_dwi_inputs,
+    threads: 16
     output:
         DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz",
         # expand(DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log",
         # expand(DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
@@ -223,11 +225,14 @@ rule compute_b0:
         dwi=rules.resample_dwmri.output,
         bval=bval,
         bvec=bvec,
+    threads: 16
     output:
         b0=DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_b0.nii.gz",
     params:
         base_dir = base_dir,
         container=MRTRIX,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/compute_b0.log",
     container:
@@ -252,6 +257,7 @@ rule register_b0_to_t1:
     input:
         b0=rules.compute_b0.output.b0,
         t1=T1_DIR / template,
+    threads: 16
     output:
         affine=DERIVATIVES
         / "sub-{subject}"
@@ -268,6 +274,8 @@ rule register_b0_to_t1:
         output_prefix=output_prefix,
         container=Ants,
         itk_threads=itk_thread_count,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/register_t1_to_b0.log",
     container:
@@ -295,6 +303,7 @@ rule transform_masks_to_dwi:
         t1_seed=T1_DIR / "T1_seed.nii.gz",
         t1_5tt=T1_DIR / "T1_5tt.nii.gz",
         t1_gmwmi=T1_DIR / "T1_gmwmi.nii.gz",
+    threads: 16
     output:
         dwi_mask=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_mask.nii.gz",
         dwi_seed=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_seed.nii.gz",
@@ -305,6 +314,8 @@ rule transform_masks_to_dwi:
         base_dir=base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/transform_masks_to_dwi.log",
     container:
@@ -355,6 +366,7 @@ rule fit_fod:
         bval=bval,
         bvec=bvec,
         dwi_mask=rules.transform_masks_to_dwi.output.dwi_mask,
+    threads: 16
     output:
         response=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_tournier.txt",
         fod=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_fod.nii.gz",
@@ -362,6 +374,8 @@ rule fit_fod:
         base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/fit_fod.log",
     container:
@@ -392,6 +406,7 @@ rule fit_fod:
 rule convert_transform_to_mni:
     input:
         dwi2t1_affine=rules.register_b0_to_t1.output.affine,
+    threads: 16
     output:
         dwi2mni_txt=DERIVATIVES
         / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.txt",
@@ -401,6 +416,8 @@ rule convert_transform_to_mni:
         itk_threads=itk_thread_count,
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/convert_transform_to_mni.log",
+    resources:
+        io=0 
     container:
         Ants
     shell:
@@ -423,6 +440,7 @@ rule transform_fod_to_mni:
         fod=rules.fit_fod.output.fod,
         mni_template=T1_DIR / template,
         dwi2mni_txt=rules.convert_transform_to_mni.output.dwi2mni_txt,
+    threads: 16
     output:
         dwi2mni_trix=DERIVATIVES
         / "sub-{subject}/ses-{session}/dwmri2MNI_0GenericAffine_tfm.trix",
@@ -431,6 +449,8 @@ rule transform_fod_to_mni:
         base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/transform_fod_to_mni.log",
     container:
@@ -470,6 +490,7 @@ rule transform_fod_to_mni:
 rule convert_fod_to_signal:
     input:
         fod_mni=rules.transform_fod_to_mni.output.fod_mni,
+    threads: 16
     output:
         sf_mni=DERIVATIVES
         / "sub-{subject}"
@@ -477,6 +498,8 @@ rule convert_fod_to_signal:
         / "dwmri_sf_mni_trix.nii.gz",
     params:
         base_dir = base_dir,
+    resources:
+        io=0 
     shell:
         """
         scil_sh_to_sf --sh_basis tournier07 --sphere repulsion100 \\
@@ -490,11 +513,12 @@ rule run_tractography:
         # fod = rules.transform_fod_to_mni.output.fod_mni,
         dwi_mask=rules.transform_masks_to_dwi.output.dwi_mask,
         # t1_mask = T1_DIR / "T1_mask.nii.gz",
-        # t1_gmwmi = T1_DIR /_gmwmi=rules.transform_masks_to_dwi.output.dwi_gmwmi,
+        dwi_gmwmi = rules.transform_masks_to_dwi.output.dwi_gmwmi,
         # t1_mask = T1_DIR / template,
         dwi_seed=rules.transform_masks_to_dwi.output.dwi_seed,
         # t1_5tt = T1_DIR / "T1_5tt.nii.gz",
         dwi_5tt=rules.transform_masks_to_dwi.output.dwi_5tt,
+    threads: 16
     output:
         tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_minlen_50.tck",
         seeds_txt=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.txt",
@@ -507,6 +531,8 @@ rule run_tractography:
         base_dir = base_dir,
         container=MRTRIX,
         itk_threads=itk_thread_count,
+    resources:
+        io=1 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/run_tractography.log",
     container:
@@ -557,6 +583,7 @@ rule transform_tractograms_to_t1:
         seeds_tck=rules.run_tractography.output.seeds_tck,
         t1_n4=T1_DIR / "T1_N4.nii.gz",
         dwi2t1_affine=rules.register_b0_to_t1.output.affine,
+    threads: 16
     output:
         tck_t1_no_remove=DERIVATIVES
         / "sub-{subject}"
@@ -569,6 +596,8 @@ rule transform_tractograms_to_t1:
         tck_t1=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_test50to250.trk",
     params:
         base_dir=base_dir,
+    resources:
+        io=1 
     shell:
         """
         # Transform main tractogram to T1 space (no removal)
@@ -594,6 +623,7 @@ rule transform_tractograms_to_mni:
         seeds_t1=rules.transform_tractograms_to_t1.output.seeds_t1,
         t1_n4_mni=T1_DIR / "T1_N4_mni_1mm.nii.gz",
         t12mni_affine=T1_DIR / "mni_t1_0GenericAffine.mat",
+    threads: 16
     output:
         tck_mni_no_remove=DERIVATIVES
         / "sub-{subject}"
@@ -609,6 +639,8 @@ rule transform_tractograms_to_mni:
         / "T1_test50to250_mni.trk",
     params:
         base_dir=base_dir,
+    resources:
+        io=1 
     shell:
         """
         # Transform main tractogram to MNI space (no removal)
@@ -631,10 +663,13 @@ rule transform_tractograms_to_mni:
 rule compute_tdi:
     input:
         tck_mni=rules.transform_tractograms_to_mni.output.tck_mni,
+    threads: 16
     output:
         tdi=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "T1_mni_tdi.nii.gz",  # "T1_test50to250_mni_tdi.nii.gz",
     params:
         base_dir=base_dir,
+    resources:
+        io=1 
     shell:
         """
         scil_tractogram_compute_density_map \\
@@ -646,14 +681,16 @@ rule compute_model_to_sub_mat:
     input:
         b0=rules.compute_b0.output.b0,
         model_ref=model_ref,
+    threads: 16
     output:
-        mat = DERIVATIVES / "sub-{subject}"/ "ses-{session}" / "bundleseg/model_to_sub_tfm.mat",
+        mat = DERIVATIVES / "sub-{subject}"/ "ses-{session}" / "bundleseg/model_to_sub_tfm0GenericAffine.mat",
     params:
         base_dir = base_dir,
         container=Ants,
         itk_threads=itk_thread_count,
         bsmask = bsmask
-
+    resources:
+        io=0 
     container:
         Ants
     shell:
@@ -661,7 +698,7 @@ rule compute_model_to_sub_mat:
         apptainer exec -c -e -B {params.base_dir} -B {params.bsmask} --env \\
         "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} antsRegistrationSyN.sh  -d 3 -m {input.model_ref} \\
-        -f {input.b0} -t a -n 4 -o {output.mat}
+        -f {input.b0} -t a -n 4 -o $(dirname {output.mat})/model_to_sub_tfm
         """
 
 
@@ -669,17 +706,23 @@ rule bundleseg:
     input:
         tck=rules.run_tractography.output.tck,
         trk_atlas=trk_atlas,
+        tck_ref=rules.compute_b0.output.b0,
         config=bsconfig,
         model_to_subj_tfm=rules.compute_model_to_sub_mat.output.mat,
+    threads: 16
+    resources:
+        io=1 
     output:
         logfle = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/logfile.txt",
         results = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/results.json",
     params:
         base_dir = base_dir,
+        processes=itk_thread_count
     shell:
         """
         scil_tractogram_segment_with_bundleseg {input.tck} {input.config} \\
         {input.trk_atlas}/* {input.model_to_subj_tfm} \\
+        --reference {input.tck_ref} \\
         --out_dir {params.base_dir}/bundleseg -v DEBUG --minimal_vote 0.4 \\
-        --processes 8 --seed 0 --exploration_mode -f
+        --processes {params.processes} --seed 0 --exploration_mode -f
         """
