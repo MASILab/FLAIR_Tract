@@ -15,6 +15,39 @@ def hierarch_pq(grp):
     return ret
 
 
+def order_group_by_session(grp):
+    g = grp.sort_values("session")
+    return g.iloc[-1]
+
+
+def propagate_anat_across_rows(grp):
+    g = grp.sort_values("session")
+    g.iat[0, -1] = g.iat[1, -1]
+    g.iat[0, -2] = g.iat[1, -2]
+    return g
+
+
+def get_ordered_subject_data(grp: pd.DataFrame):
+    grp = grp.sort_values("session")
+    g_end = grp.iloc[1:, :]
+    g_end = g_end[~(g_end.flair.isna()) & ~(g_end.mprage.isna())]
+    if len(g_end):
+        scan2 = g_end.sample(1)
+        scan1_set = grp.iloc[: scan2.index[0], :]
+        scan1 = scan1_set[scan1_set.session != scan2.session.values[0]].sample(
+            1
+        )
+        if len(scan1):
+            return (scan1.index[0], scan2.index[0])
+    return (-1, -1)
+
+
+def prequal_is_valid(p: str):
+    if not pl.Path(p).joinpath("PREPROCESSED").exists():
+        return False
+    return True
+
+
 rg = local["rg"]
 prequal_list = "/nfs2/harmonization/BIDS/ALL_PREQUALS_11_20_25.txt"
 pattern = r"(\bNACC\b|BIOCARD|WRAP\b|BLSA|WASHU|HABSHD)"
@@ -29,10 +62,13 @@ prequal_dirs = list(
 )
 ser = pd.Series(sorted(prequal_dirs, key=lambda s: "".join(s.split("/")[6:7])))
 df = ser.to_frame(name="path")
+df.loc[:, ["valid_prequal"]] = df.path.apply(prequal_is_valid)
+df = df[df.valid_prequal]
 df["dataset"] = df.path.map(lambda s: s.split("/")[4])
 df["subject"] = df.path.map(lambda s: s.split("/")[6])
 df["session"] = df.path.map(lambda s: s.split("/")[7])
 df["sub_sess_count"] = df.groupby("subject")["session"].count()
+
 df.drop(columns="sub_sess_count", inplace=True)
 sub_sess_count = df.groupby("subject")["session"].nunique()
 sub_sess_count.name = "sub_sess_count"
@@ -64,9 +100,6 @@ else:
     flair_df = pd.read_csv("FLAIR_LIST_01-12-2026.csv")
 flair_df["subject"] = flair_df.flair.map(lambda s: s.split("/")[5])
 flair_df["session"] = flair_df.flair.map(lambda s: s.split("/")[6])
-dedup_flair_df = flair_df[["subject", "flair"]].drop_duplicates(
-    subset="subject"
-)
 
 mprage = []
 for row in df.itertuples():
@@ -80,24 +113,50 @@ for row in df.itertuples():
 
 t1_df = pd.Series(mprage, name="mprage").to_frame()
 t1_df["subject"] = t1_df.mprage.map(lambda s: s.split("/")[5])
-t1_df = t1_df.drop_duplicates(subset="subject")
+t1_df["session"] = t1_df.mprage.map(lambda s: s.split("/")[6])
 
-df_flair_subsess = df_sub_gr1.merge(dedup_flair_df, on=["subject"], how="left")
-df_flair_t1 = df_flair_subsess.merge(t1_df, on=["subject"], how="left")
+df_flair_subsess = df_sub_gr1.merge(
+    flair_df, on=["subject", "session"], how="left"
+)
+df_flair_t1 = df_flair_subsess.merge(
+    t1_df, on=["subject", "session"], how="left"
+)
 
-subject_list = (
-    df_flair_t1[
-        ~(df_flair_t1.dataset.isin(("OASIS4", "WRAPnew", "SCAN")))
-        & (df_flair_t1.flair.notna())
+paired_data = df_flair_t1.groupby("subject").apply(
+    get_ordered_subject_data, include_groups=False
+)
+paired_data = paired_data.to_frame(name="pair").reset_index()
+
+subject_indexes = []
+for pair in paired_data[paired_data.pair != -1].itertuples():
+    subject_indexes.extend(list(pair.pair))
+
+subject_series = (
+    df_flair_t1[df_flair_t1.index.isin(subject_indexes)]
+    .loc[:]
+    .drop_duplicates(subset="subject")
+    .groupby(by="dataset")["subject"]
+    .sample(25)
+)
+selected_indexes = df_flair_t1[df_flair_t1.index.isin(subject_indexes)]
+selected_data = selected_indexes[
+    selected_indexes.subject.isin(subject_series.values)
+]
+
+selected_data = (
+    selected_data.groupby(by="subject")
+    .apply(propagate_anat_across_rows, include_groups=False)
+    .reset_index()
+)
+selected_data = selected_data[
+    [
+        "dataset",
+        "subject",
+        "session",
+        "path",
+        "flair",
+        "mprage",
+        "valid_prequal",
     ]
-    .groupby("dataset")
-    .subject.sample(25)
-)
-df_flair_t1[df_flair_t1.subject.isin(subject_list)].to_csv(
-    "UPDATED_DATASET_01-12-2026.csv", index=False
-)
-df_flair_t1.groupby(by=["subject", "session"]).apply(
-    hierarch_pq, include_groups=False
-).reset_index().sort_values(by=["dataset", "subject", "session"]).drop(
-    columns="level_2"
-k.groupby(by="subject").apply(lambda grp: grp.iloc[:2, :], include_groups=False)
+]
+selected_data.to_csv("CURRENT_DATASET_01-20-2026.csv", index=False)
