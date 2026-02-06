@@ -1,0 +1,4 @@
+derivatives_dir: /home-local/schwat1/FLAIR_processing/BIDS_format/derivatives
+t1_path: /fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/MNI/mni_icbm152_nlin_sym_09c/T1_N4_mni_1mm.nii.gz
+atlas_path: /fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/MNI/mni_icbm152_nlin_sym_09c
+proj_path: /home-local/schwat1/FLAIR_processing

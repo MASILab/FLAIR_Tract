@@ -1,0 +1,15 @@
+containers: {mrtrix: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/sifs/MRtrix3.sif", ants: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/sifs/Ants.sif"}
+#base_dir: "/fs5/p_masi/schwat1/spie_flair_tract_extension/data_dir"
+bids_dir: "/home-local/schwat1/FLAIR_processing/BIDS_format"
+base_dir: "/home-local/schwat1/FLAIR_processing"
+dwi_pattern: "PREPROCESSED/dwmri.nii.gz"
+# add exclude pattern
+t1_dir: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/MNI/mni_icbm152_nlin_sym_09c"
+deriv: "derivatives"
+itk_threads: 16 
+mni_template: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/MNI/mni_icbm152_nlin_sym_09c/mni_icbm152_t1_tal_nlin_sym_09c.nii.gz"
+trk_atlas: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/atlases"
+bsbase: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg"
+bsmask: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/mni_masked.nii.gz"
+bsconfig: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/config_fss_2.json"
+model_ref: "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/mni_masked.nii.gz"

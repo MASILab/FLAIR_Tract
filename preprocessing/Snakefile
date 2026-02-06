@@ -107,10 +107,10 @@ d = {
     "compute_tdi_outputs": ["sub-{subject}/ses-{session}/T1_mni_tdi.nii.gz"],
     # "compute_model_to_sub_mat_outputs": [ "sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm.mat" ],
     "compute_model_to_sub_mat_outputs": ["sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm0GenericAffine.mat"],
-    "bundleseg_outputs": [
-        "sub-{subject}/ses-{session}/bundleseg/logfile.txt",
-        "sub-{subject}/ses-{session}/bundleseg/results.json",
-    ],
+    # "bundleseg_outputs": [
+    #     "sub-{subject}/ses-{session}/bundleseg/logfile.txt",
+    #     "sub-{subject}/ses-{session}/bundleseg/results.json",
+    # ],
 }
 
 
@@ -417,7 +417,7 @@ rule convert_transform_to_mni:
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/convert_transform_to_mni.log",
     resources:
-        io=0 
+        io=1 
     container:
         Ants
     shell:
@@ -462,7 +462,7 @@ rule transform_fod_to_mni:
         mkdir -p $(dirname {output.dwi2mni_trix})
         mkdir -p $(dirname {log})
         # Convert text transform to MRtrix format - FIX: use input.dwi2mni_txt not output
-        apptainer exec -B {params.base_dir} -B $(dirname {input.dwi2mni_txt}) \\
+        apptainer exec -B {params.base_dir} \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} transformconvert {input.dwi2mni_txt} \\
         itk_import {output.dwi2mni_trix} 2>> {log} #noqa
@@ -499,7 +499,7 @@ rule convert_fod_to_signal:
     params:
         base_dir = base_dir,
     resources:
-        io=0 
+        io=1 
     shell:
         """
         scil_sh_to_sf --sh_basis tournier07 --sphere repulsion100 \\
@@ -518,7 +518,7 @@ rule run_tractography:
         dwi_seed=rules.transform_masks_to_dwi.output.dwi_seed,
         # t1_5tt = T1_DIR / "T1_5tt.nii.gz",
         dwi_5tt=rules.transform_masks_to_dwi.output.dwi_5tt,
-    threads: 16
+    threads: 8
     output:
         tck=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "dwmri_minlen_50.tck",
         seeds_txt=DERIVATIVES / "sub-{subject}" / "ses-{session}" / "SDStream_seeds.txt",
@@ -690,7 +690,7 @@ rule compute_model_to_sub_mat:
         itk_threads=itk_thread_count,
         bsmask = bsmask
     resources:
-        io=0 
+        io=1 
     container:
         Ants
     shell:
@@ -716,13 +716,13 @@ rule bundleseg:
         logfle = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/logfile.txt",
         results = DERIVATIVES / "sub-{subject}"/ "ses-{session}"  / "bundleseg/results.json",
     params:
-        base_dir = base_dir,
+        bids_dir =  DERIVATIVES / "sub-{subject}"/ "ses-{session}",
         processes=itk_thread_count
     shell:
         """
         scil_tractogram_segment_with_bundleseg {input.tck} {input.config} \\
         {input.trk_atlas}/* {input.model_to_subj_tfm} \\
         --reference {input.tck_ref} \\
-        --out_dir {params.base_dir}/bundleseg -v DEBUG --minimal_vote 0.4 \\
+        --out_dir {params.bids_dir}/bundleseg -v DEBUG --minimal_vote 0.1 \\
         --processes {params.processes} --seed 0 --exploration_mode -f
         """
