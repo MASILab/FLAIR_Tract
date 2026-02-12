@@ -530,7 +530,7 @@ rule run_tractography:
     params:
         base_dir = base_dir,
         container=MRTRIX,
-        itk_threads=itk_thread_count,
+        itk_threads=8,
     resources:
         io=1 
     log:

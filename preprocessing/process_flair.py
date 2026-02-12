@@ -5,6 +5,7 @@ from plumbum import local
 import yaml
 from collections.abc import Sequence
 from typing import Any, TypedDict
+import sys
 
 
 class ConfigType(TypedDict):
@@ -86,7 +87,7 @@ def register_flair2T1(
             "--bind",
             bind_string,
             "--env",
-            "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1",
+            "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=8",
             str(ants_sif_path),
         ]
         ants_registration = apptainer_cmd["antsRegistrationSyN.sh"]
@@ -119,11 +120,11 @@ def register_atlas_seg_2_flair(
     atlas_path_base = Path(config["atlas_path"])
 
     target_files: dict[str, tuple[int, str]] = {
-        # "T1_seg_mni_1mm.nii.gz": (0, "NearestNeighbor"),
+        "T1_seg_mni_1mm.nii.gz": (0, "NearestNeighbor"),
         "T1_5tt.nii.gz": (3, "Linear"),
-        # "T1_tractseg_mni_1mm.nii.gz": (3, "Linear"),
-        # "T1_slant_mni_1mm.nii.gz": (0, "NearestNeighbor"),
-        # "T1_seed_mni_1mm.nii.gz": (0, "NearestNeighbor"),
+        "T1_tractseg.nii.gz": (3, "Linear"),
+        "T1_slant.nii.gz": (3, "NearestNeighbor"),
+        "T1_seed_mni_1mm.nii.gz": (0, "NearestNeighbor"),
     }
 
     for path in total_paths:
@@ -191,22 +192,22 @@ def register_atlas_seg_2_flair(
                 "--bind",
                 bind_string,
                 "--env",
-                "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1",
+                "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=8",
                 str(ants_sif_path),
             ]
             ants_registration = apptainer_cmd["antsRegistrationSyN.sh"]
-            # ants_registration(
-            #     "-d",
-            #     "3",
-            #     "-f",
-            #     str(flair_path),
-            #     "-m",
-            #     str(atlas_t1_path),
-            #     "-t",
-            #     "s",
-            #     "-o",
-            #     str(registration_result_folder / "atlas_T1_registered2_flair"),
-            # )
+            ants_registration(
+                "-d",
+                "3",
+                "-f",
+                str(flair_path),
+                "-m",
+                str(atlas_t1_path),
+                "-t",
+                "s",
+                "-o",
+                str(registration_result_folder / "atlas_T1_registered2_flair"),
+            )
 
             # # Apply transforms to each target file
             for target_file in target_files.keys():
@@ -219,8 +220,7 @@ def register_atlas_seg_2_flair(
                     str(this_file.parent),  # Target file directory
                     str(
                         registration_result_folder
-                    ),  # Transform files directory
-                    str(registration_result_folder),  # Output directory
+                    )  # Transform files directory
                 ]
 
                 bind_string = ",".join(bind_mounts)
@@ -233,7 +233,7 @@ def register_atlas_seg_2_flair(
                     "--bind",
                     bind_string,
                     "--env",
-                    "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1",
+                    "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=8",
                     str(ants_sif_path),
                 ]
                 ants_apply_transforms = apptainer_cmd["antsApplyTransforms"]
@@ -301,13 +301,30 @@ def register_atlas_seg_2_flair(
             nii = nib.load(str(input_file_path))
             data = nii.get_fdata()
 
-            # For a single file, fusion is just copying the data
-            fused_map = data.copy()
+            data = np.expand_dims(data, axis=-1)  # Add dimension for stacking
+            maps = [data]
+
+            # Stack maps along the last axis (though we only have one now)
+            stacked_maps = np.concatenate(maps, axis=-1)
+
+            # Perform fusion based on file type
+            if "_seg_4d_" in target or "_tractseg_" in target or "_seed_" in target:
+                print(target)
+                print(output_file_path)
+                # For segmentation files, use mode (most frequent value)
+                fused_map = np.apply_along_axis(
+                    lambda x: np.bincount(x.astype(int)).argmax(),
+                    axis=-1,
+                    arr=stacked_maps
+                )
+            else:
+                # For other files, use mean
+                fused_map = np.mean(stacked_maps, axis=-1)
 
             # Preserve original data type
             original_dtype = nii.get_data_dtype()
             fused_map = fused_map.astype(original_dtype)
-
+            
             # Create and save the fused NIfTI image
             fused_nii = nib.Nifti1Image(
                 fused_map,
@@ -315,3 +332,9 @@ def register_atlas_seg_2_flair(
                 header=reference_nii.header,
             )
             nib.save(fused_nii, str(output_file_path))
+
+
+if __name__ == "__main__":
+    total_paths = [sys.argv[1]]
+    register_flair2T1(total_paths)
+    register_atlas_seg_2_flair(total_paths)

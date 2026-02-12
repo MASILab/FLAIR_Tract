@@ -6,7 +6,8 @@ RESOURCE_DIR='/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/'
 PREPROC_DIR='/fs5/p_masi/schwat1/spie_flair_tract_extension/preprocessing/'
 MRtrix="$RESOURCE_DIR/sifs/MRtrix3.sif"
 ANTS="$RESOURCE_DIR/sifs/Ants.sif"
-UNEST="$RESOURCE_DIR/sifs/Unest.sif"
+# UNEST="$RESOURCE_DIR/sifs/Unest.sif"
+SLANT="/fs5/p_masi/schwat1/flair_tractography/sifs/mySLANT.simg"
 TRACTSEG="/fs5/p_masi/schwat1/flair_tractography/sifs/tractSeg_release_cpu.simg"
 OUT_5TTGEN="$T1_DIR/T1_5tt.nii.gz"
 OUT_FSLMATHS="$T1_DIR/T1_seed.nii.gz"
@@ -17,27 +18,30 @@ THREADS=48
 
 export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=$THREADS
 
-apptainer run -e --contain --home "$T1_DIR" --bind "$T1_DIR":/INPUTS --bind "$T1_DIR":/OUTPUTS --bind \
-"$RESOURCE_DIR/working_dir":/WORKING_DIR --bind /tmp:/tmp \
---bind "$RESOURCE_DIR" "$UNEST" --w_skull 
+# apptainer run -e --contain --home "$T1_DIR" --bind "$T1_DIR":/INPUTS --bind "$T1_DIR":/OUTPUTS --bind \
+# "$RESOURCE_DIR/working_dir":/WORKING_DIR --bind /tmp:/tmp \
+# --bind "$RESOURCE_DIR" "$UNEST" --w_skull 
 
-#cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_2pt2mm_seg.nii.gz" "$T1_DIR/T1_2pt2mm_seg.nii.gz" || exit
-cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_seg.nii.gz" "$T1_DIR/T1_seg.nii.gz" || exit
+# mkdir -p "$T1_DIR"/slant
+# apptainer exec -e --contain --home "$T1_DIR" --bind /tmp:/tmp --bind "$T1_FILE":/INPUTS/T1.nii.gz --bind "$T1_DIR"/slant:/OUTPUTS --nv $SLANT /extra/run_deep_brain_seg.sh
+# python group_slant.py "$T1_DIR"/slant/FinalResult/T1_seg.nii.gz "$T1_DIR"/T1_slant.nii.gz
+
+# cp "$T1_DIR/FinalResults/wholebrain/mni_icbm152_t1_tal_nlin_sym_09c_seg.nii.gz" "$T1_DIR/T1_seg.nii.gz" || exit
 
 fslmaths "$T1_DIR/T1_seg.nii.gz" -div "$T1_DIR/T1_seg.nii.gz" -fillh "$T1_DIR/T1_mask.nii.gz" -odt int || exit
 
 apptainer exec -ce --bind "$T1_DIR" "$ANTS" N4BiasFieldCorrection -d 3 -i "$T1_FILE" -x "$T1_DIR/T1_mask.nii.gz" -o "$T1_DIR/T1_N4.nii.gz" || exit 
 
-apptainer exec -e --contain --bind /tmp:/tmp --bind "$RESOURCE_DIR" --bind "$PREPROC_DIR" --home /tmp "$MRtrix" 5ttgen fsl -nthreads "$THREADS" "$T1_DIR/T1_N4.nii.gz" "$OUT_5TTGEN" -mask "$T1_DIR/T1_mask.nii.gz" -nocrop -v || exit
+# apptainer exec -e --contain --bind /tmp:/tmp --bind "$RESOURCE_DIR" --bind "$PREPROC_DIR" --home /tmp "$MRtrix" 5ttgen fsl -nthreads "$THREADS" "$T1_DIR/T1_N4.nii.gz" "$OUT_5TTGEN" -mask "$T1_DIR/T1_mask.nii.gz" -nocrop -v || exit
 
 # # Generate seed maps:
 # # - T1_seed.nii.gz
 # # - T1_gmwmi.nii.gz
 
 echo "prep_T1.sh: Computing seed mask..."
-fslmaths "$OUT_5TTGEN" -roi 0 -1 0 -1 0 -1 2 1 -bin -Tmax "$OUT_FSLMATHS" -odt int || exit
+# fslmaths "$OUT_5TTGEN" -roi 0 -1 0 -1 0 -1 2 1 -bin -Tmax "$OUT_FSLMATHS" -odt int || exit
 
-apptainer exec -e --contain --bind "$RESOURCE_DIR" --bind "$PREPROC_DIR" "$MRtrix" 5tt2gmwmi -mask_in "$T1_DIR/T1_mask.nii.gz" "$OUT_5TTGEN" "$OUT_GMWMI" || exit
+# apptainer exec -e --contain --bind "$RESOURCE_DIR" --bind "$PREPROC_DIR" "$MRtrix" 5tt2gmwmi -mask_in "$T1_DIR/T1_mask.nii.gz" "$OUT_5TTGEN" "$OUT_GMWMI" || exit
 
 # # Generate bundle priors:
 # # - T1_tractseg.nii.gz
