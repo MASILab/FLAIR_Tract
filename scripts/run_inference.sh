@@ -26,6 +26,7 @@ done > "$data_dir/subj_for_inference.txt"
 run_ft_inference() {
   local slot="$1"
   local sub_dir="$2"
+  echo "SLOT $slot"
   
   if [ -z "$slot" ] || [ -z "$sub_dir" ]; then
     echo "Error: Missing slot or sub_dir argument for run_ft_inference." >&2
@@ -39,4 +40,4 @@ run_ft_inference() {
 
 export -f run_ft_inference
 
-parallel --env _ --progress --joblog "$job_log" -j3 run_ft_inference {%} {}  :::: "$data_dir"/subj_for_inference.txt
+parallel --env _ --progress --joblog "$job_log" --resume -j3 run_ft_inference {%} {}  :::: "$data_dir"/subj_for_inference.txt
