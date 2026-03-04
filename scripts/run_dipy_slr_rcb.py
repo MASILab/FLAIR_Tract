@@ -29,7 +29,6 @@ def run_dipy_slr_recobundles(
     if jobs is None:
         jobs = max(1, total_cpus // threads_per_job)
 
-
     thread_env = {
         "OMP_NUM_THREADS": str(threads_per_job),
         "OPENBLAS_NUM_THREADS": str(threads_per_job),
@@ -41,16 +40,15 @@ def run_dipy_slr_recobundles(
     parallel_opts = ["-j", str(jobs)]
     for env_var in thread_env.keys():
         parallel_opts.extend(["--env", env_var])
-    
+
     if parallel_dry_run:
         parallel_opts.append("--dry-run")
-    parallel_args = parallel_opts +[
+    parallel_args = parallel_opts + [
         "python",
         "dipy_slr_recobundles.py",
         wb_trk_template,
         "{}",
         atlases_pattern,
-        
     ]
 
     parallel_cmd = parallel[*parallel_args]

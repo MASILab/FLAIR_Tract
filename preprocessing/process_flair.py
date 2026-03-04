@@ -17,7 +17,7 @@ class ConfigType(TypedDict):
 
 def register_flair2T1(
     total_paths: Sequence[str | Path],
-    config_path: str = "process_flair_config.yaml",
+    config_path: str = "/fs5/p_masi/schwat1/spie_flair_tract_extension/preprocessing/process_flair_config.yaml",
     ants_sif_path: str | Path = "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/sifs/Ants.sif",
 ) -> None:
     """Register FLAIR image to T1 image using ANTs via Apptainer."""
@@ -107,7 +107,7 @@ def register_flair2T1(
 
 def register_atlas_seg_2_flair(
     total_paths: Sequence[str | Path],
-    config_path: str = "process_flair_config.yaml",
+    config_path: str = "/fs5/p_masi/schwat1/spie_flair_tract_extension/preprocessing/process_flair_config.yaml",
     fs5_flair_copy_path: str | Path | None = None,
     compute_fusion_only: bool = False,
     ants_sif_path: str | Path = "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/sifs/Ants.sif",
