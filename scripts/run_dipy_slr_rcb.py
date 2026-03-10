@@ -1,15 +1,19 @@
 from plumbum import local
 import os
 import fire
-
-# python dipy_slr_recobundles.py
-# _delete_me/double_del/Atlas_30_Bundles/whole_brain/whole_brain_MNI.trk
-# _delete_me/T1_test50to250.trk "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/atlases/atlas/pop_average/*.trk"
+import tempfile
+import yaml
+from more_itertools import flatten
 
 parallel = local["parallel"]
 fdfind = local["fdfind"]
-atlases_pattern = "'/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/bundleseg/atlases/atlas/pop_average/*.trk'"
-wb_trk_template = "/fs5/p_masi/schwat1/spie_flair_tract_extension/resources/atlases/Atlas_30_Bundles/whole_brain/whole_brain_MNI.trk"
+
+with open("rdsr.yaml", "r") as config:
+    conf = yaml.safe_load(config)
+
+atlases_pattern = conf["atlases_pattern"]
+wb_trk_template = conf["wb_trk_template"]
+script_path = conf["script_path"]
 
 
 def run_dipy_slr_recobundles(
@@ -22,8 +26,10 @@ def run_dipy_slr_recobundles(
     threads_per_job=4,
     jobs=None,
 ):
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as tmp:
+        input_list_path = tmp.name
     fdfind_args = ["-t", "f", subj_pattern, search_dir, "--absolute-path"]
-    input_tractogram_list = fdfind[*fdfind_args]
+    (fdfind[fdfind_args] > input_list_path).run()
 
     total_cpus = os.cpu_count() or 1
     if jobs is None:
@@ -35,7 +41,7 @@ def run_dipy_slr_recobundles(
         "MKL_NUM_THREADS": str(threads_per_job),
         "VECLIB_MAXIMUM_THREADS": str(threads_per_job),
         "NUMEXPR_NUM_THREADS": str(threads_per_job),
-    }
+    } | conf["env_vars"]
 
     parallel_opts = ["-j", str(jobs)]
     for env_var in thread_env.keys():
@@ -43,24 +49,31 @@ def run_dipy_slr_recobundles(
 
     if parallel_dry_run:
         parallel_opts.append("--dry-run")
-    parallel_args = parallel_opts + [
-        "python",
-        "dipy_slr_recobundles.py",
+
+    remotes = list(flatten([("-S", remote) for remote in conf["remotes"]]))
+    parallel_args = parallel_opts + remotes + [
+        "--bf",
+        input_list_path,
+        "-a",
+        input_list_path,
+        conf["env_vars"]["pybin"],
+        conf["script_path"],
         wb_trk_template,
         "{}",
         atlases_pattern,
     ]
 
-    parallel_cmd = parallel[*parallel_args]
+    parallel_cmd = parallel[parallel_args]
     parallel_cmd = parallel_cmd.with_env(**thread_env)
 
-    chain = input_tractogram_list | parallel_cmd
 
     if print_chain_cmd:
-        print(chain)
+        print(parallel_cmd)
         return
     else:
-        chain()
+        # print(parallel_cmd)
+        out = parallel_cmd.run()
+        print(out)
 
 
 if __name__ == "__main__":

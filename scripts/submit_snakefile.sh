@@ -2,31 +2,35 @@
 # submit.sh - Cluster submission wrapper for GNU Parallel + SSH
 
 JOBSCRIPT="$1"
-MACHINES=("beatles.vuds.vanderbilt.edu" "swift.masi.vanderbilt.edu" "goat.vuds.vanderbilt.edu" "masi-bulgarov.vuds.vanderbilt.edu" "masi-celgate2.vuds.vanderbilt.edu" "masi-lostgirl.vuds.vanderbilt.edu")  # Edit with your hosts
+MACHINES=("swift.masi.vanderbilt.edu,goat.vuds.vanderbilt.edu,MASI-BULGAROV.vuds.vanderbilt.edu,masi-celgate2.vuds.vanderbilt.edu,masi-51.vuds.vanderbilt.edu")  # Edit with your hosts
 LOGFILE="/tmp/snakemake_submit.log"
 
-# Select host
-# Deterministic selection using md5 hash
-# 16# converts hex string to decimal in Bash arithmetic
-HASH=$(echo "$JOBSCRIPT" | md5sum | cut -c1-8)
-HOST_IDX=$((16#$HASH % ${#MACHINES[@]}))
-TARGET_HOST="${MACHINES[$HOST_IDX]}"
+echo "[$(date)] Submitting $JOBSCRIPT" >> "$LOGFILE"
 
-echo "[$(date)] Submitting $JOBSCRIPT to $TARGET_HOST (hash: $HASH, idx: $HOST_IDX)" >> "$LOGFILE"
-
-# CRITICAL: Redirect all FDs and use setsid to fully detach
-# SSH will return immediately after launching the background job
-REMOTE_PID=$(ssh -n "$TARGET_HOST" "
-    cd $PWD &&
-    setsid bash -c '
-        source /absolute/path/to/.venv/bin/activate
+REMOTE_OUTPUT=$(parallel --sshlogin "$MACHINES" \
+    --load 10% \
+    --jobs 1 \
+    --timeout 10 \
+    --ssh "ssh -n" \
+    "cd $PWD && setsid bash -c '
         nohup bash $JOBSCRIPT </dev/null >/tmp/job_\$\$_\$(date +%s).log 2>&1 &
         echo \$!
-    '
-" 2>&1) || {
-    echo "[$(date)] SSH failed for $TARGET_HOST" >> "$LOGFILE"
+    '" \
+    ::: "run" 2>&1) || {
+    echo "[$(date)] Parallel submission failed: $REMOTE_OUTPUT" >> "$LOGFILE"
     exit 1
 }
+
+# Parallel output format is "host: PID"
+# Validate we got a valid response
+if [[ -z "$REMOTE_OUTPUT" ]]; then
+    echo "[$(date)] No output from Parallel" >> "$LOGFILE"
+    exit 1
+fi
+
+# Parse host and PID from Parallel output
+TARGET_HOST=$(echo "$REMOTE_OUTPUT" | cut -d: -f1)
+REMOTE_PID=$(echo "$REMOTE_OUTPUT" | cut -d: -f2 | xargs)
 
 # Validate PID is numeric
 if ! [[ "$REMOTE_PID" =~ ^[0-9]+$ ]]; then
@@ -34,5 +38,5 @@ if ! [[ "$REMOTE_PID" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-echo "[$(date)] Remote PID: $REMOTE_PID" >> "$LOGFILE"
+echo "[$(date)] Submitted to $TARGET_HOST (PID: $REMOTE_PID)" >> "$LOGFILE"
 echo "${TARGET_HOST}:${REMOTE_PID}"

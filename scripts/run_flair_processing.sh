@@ -26,4 +26,4 @@ run_flair_proc() {
 
 export -f run_flair_proc
 
-parallel -S 16/masi-74.vuds.vanderbilt.edu -S 32/masi-celgate2.vuds.vanderbilt.edu --env _ --progress --joblog "$job_log" --resume -P1 run_flair_proc {//}  :::: "$data_dir/flair_preproc.txt"
+parallel -S masi-bulgarov.vuds.vanderbilt.edu -S 32/masi-celgate2.vuds.vanderbilt.edu --env _ --progress --joblog "$job_log" --resume -P1 run_flair_proc {//}  :::: "$data_dir/flair_preproc.txt"

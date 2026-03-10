@@ -13,7 +13,7 @@ def run_pipeline(
     mni_fixed_tractogram, moving_tractogram, tract_atlases, num_threads=-5
 ):
 
-    slr_out_dir = Path(moving_tractogram).parent.joinpath("slr_out_dir")
+    slr_out_dir = Path(moving_tractogram).parent.joinpath("dwmri_slr_out_dir")
     if not slr_out_dir.exists():
         slr_out_dir.mkdir()
     dipy_slr_arguments = [
@@ -23,7 +23,7 @@ def run_pipeline(
         "--qbx_thr",
         "50","35","25","15",
         "--num_threads",
-        str(num_threads),
+        "-5",
         "--out_dir",
         str(slr_out_dir),
     ]
@@ -31,7 +31,7 @@ def run_pipeline(
 
     moved_trk = str([*slr_out_dir.rglob("moved.tr*")][0])
 
-    recobundles_out_dir = Path(moving_tractogram).parent.joinpath("rb_out")
+    recobundles_out_dir = Path(moving_tractogram).parent.joinpath("dwmri_rb_out")
     if not recobundles_out_dir.exists():
         recobundles_out_dir.mkdir()
     dipy_recobundles_arguments = [
