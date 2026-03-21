@@ -1,15 +1,22 @@
+from aim import Image as AimImage
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for saving files
+import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
 import torch.optim as optim
-from torch.amp import autocast, GradScaler
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from datetime import timedelta
+from pathlib import Path
+import warnings
 
 # Aim import for experiment tracking
 from aim import Run
 
-from tqdm import tqdm
+from tqdm.rich import tqdm
 import numpy as np
 import math
 import os
@@ -20,20 +27,24 @@ from data import DT1Dataset, unload
 from modules import (
     DetStepLoss,
     DetRNN,
-    # DetFODLoss,
     DetFCLoss,
     DetCNNFake,
     DetConvProj,
-    # DetConvProjMulti,
 )
 
 
-# Helper Functions
+warnings.simplefilter("ignore", category=UserWarning)
 
 def maybe_wrap_ddp(model, device_ids, output_device):
     """Wrap model with DDP only if it has parameters requiring gradients."""
     if any(p.requires_grad for p in model.parameters()):
-        return DDP(model, device_ids=device_ids, output_device=output_device, find_unused_parameters=True)
+        return DDP(
+            model,
+            device_ids=device_ids,
+            output_device=output_device,
+            find_unused_parameters=True,
+            static_graph=True
+        )
     return model
 
 
@@ -41,6 +52,106 @@ def unwrap_model(model):
     """Return the underlying module, handling both DDP-wrapped and plain models."""
     return model.module if isinstance(model, DDP) else model
 
+def visualize_predictions(
+    fod_pred,
+    fod_step_pred,
+    step,
+    mask,
+    t1_pred=None,
+    t1_step_pred=None,
+    save_path=None,
+    epoch=None,
+    slice_dim=2,  # Dimension to extract middle slice from (0=sagittal, 1=coronal, 2=axial)
+    rotation_k=1
+):
+    """Generate and save visualization of 3D model predictions using orthogonal slices.
+
+    Args:
+        fod_pred: FOD CNN predictions [B, C, D, H, W] or [B, D, H, W].
+        fod_step_pred: FOD RNN step predictions.
+        step: Ground truth step directions.
+        mask: Valid streamline mask.
+        t1_pred: T1 CNN predictions (Stage 1 only).
+        t1_step_pred: T1 RNN step predictions (Stage 1 only).
+        save_path: Path to save the figure.
+        epoch: Current epoch number.
+        slice_dim: Which dimension to use for middle slice extraction.
+    """
+    def get_middle_slice(tensor_3d, dim):
+        """Extract middle slice from 3D/4D tensor along specified dimension."""
+        if tensor_3d.ndim == 4:  # [C, D, H, W]
+            # Take middle index along specified spatial dim (1,2,3 correspond to D,H,W)
+            if dim == 0:  # axial: middle of depth
+                return tensor_3d[:, tensor_3d.shape[1]//2, :, :].mean(axis=0)
+            elif dim == 1:  # sagittal: middle of height
+                return tensor_3d[:, :, tensor_3d.shape[2]//2, :].mean(axis=0)
+            else:  # coronal: middle of width
+                return tensor_3d[:, :, :, tensor_3d.shape[3]//2].mean(axis=0)
+        elif tensor_3d.ndim == 3:  # [D, H, W]
+            if dim == 0:
+                return tensor_3d[tensor_3d.shape[0]//2, :, :]
+            elif dim == 1:
+                return tensor_3d[:, tensor_3d.shape[1]//2, :]
+            else:
+                return tensor_3d[:, :, tensor_3d.shape[2]//2]
+        return tensor_3d
+
+    def normalize_for_viz(arr):
+        """Normalize array to [0, 1] for visualization."""
+        arr = np.asarray(arr)
+        min_val, max_val = arr.min(), arr.max()
+        if max_val - min_val > 1e-8:
+            return (arr - min_val) / (max_val - min_val)
+        return np.zeros_like(arr)
+
+    def rotate_slice(arr, k):
+        """Rotate slice by k * 90 degrees counter-clockwise."""
+        return np.rot90(arr, k=k)
+
+    # Detach and move to CPU
+    fod_pred_np = fod_pred.detach().cpu().numpy()
+    fod_step_pred_np = fod_step_pred.detach().cpu().numpy()
+    step_np = step.detach().cpu().numpy()
+    mask_np = mask.detach().cpu().numpy()
+    
+    if t1_pred is not None:
+        t1_pred_np = t1_pred.detach().cpu().numpy()
+    if t1_step_pred is not None:
+        t1_step_pred_np = t1_step_pred.detach().cpu().numpy()
+    
+    # Create figure: 3 rows (FOD, T1, Mask/GT) x 3 columns (axial, sagittal, coronal)
+    fig, axes = plt.subplots(3, 3, figsize=(12, 12))
+    
+    # Helper to plot three orthogonal views
+    def plot_orthogonal(ax_row, data, title_prefix):
+        for col, dim in enumerate([0, 1, 2]):
+            slice_data = get_middle_slice(data, dim)
+            slice_rotated = rotate_slice(slice_data, rotation_k)
+            slice_norm = normalize_for_viz(slice_rotated)
+            im = ax_row[col].imshow(slice_norm, cmap='viridis')
+            ax_row[col].set_title(f'{title_prefix} - {"Sagittal" if col==0 else "Coronal" if col==1 else "Axial"}')
+            ax_row[col].axis('off')
+            plt.colorbar(im, ax=ax_row[col], fraction=0.046, pad=0.04)
+    
+    # Row 0: FOD predictions
+    plot_orthogonal(axes[0], fod_pred_np[0], 'FOD CNN Pred')
+    
+    # Row 1: FOD RNN step predictions vs Ground Truth
+    plot_orthogonal(axes[1], fod_step_pred_np[0], 'FOD RNN Step Pred')
+    # Overlay ground truth on the same row, different columns handled above
+    # Add GT as separate row or overlay - let's add as row 2 for clarity
+    
+    # Row 2: Ground Truth Step
+    plot_orthogonal(axes[2], step_np[0], 'Ground Truth Step')
+    
+    plt.suptitle(f'Epoch {epoch} - Validation Predictions', fontsize=16, y=1.02)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    
+    return save_path
 
 def epoch_losses(
     data_loader,
@@ -58,31 +169,47 @@ def epoch_losses(
     use_amp,
     rank,
 ):
+    """Compute losses over one epoch for training or validation.
+
+    Args:
+        data_loader: DataLoader for the dataset.
+        fod_cnn: FOD CNN model.
+        t1_cnn: T1 CNN model.
+        fod_rnn: FOD RNN model.
+        t1_rnn: T1 RNN model.
+        fc_criterion: Criterion for fully connected loss.
+        rnn_criterion: Criterion for RNN loss.
+        device: Torch device.
+        optimizer: Optimizer.
+        label: Label for progress bar (e.g., 'Train', 'Validation').
+        stage: Training stage (0 or 1).
+        scaler: GradScaler for AMP.
+        use_amp: Boolean flag for Automatic Mixed Precision.
+        rank: Process rank for distributed training.
+
+    Returns:
+        Tuple of average losses.
+    """
     train = "train" in label.lower()
+
     epoch_loss = 0
     epoch_fod_dot_loss = 0
     epoch_fod_cum_loss = 0
     epoch_t1_dot_loss = 0
     epoch_t1_cum_loss = 0
-    # epoch_fod_loss = 0
     epoch_fc_loss = 0
-    # epoch_mid_loss = 0
 
     epoch_iters = len(data_loader)
 
-    show_batch_progress = (rank == 0)
-    
+    show_batch_progress = rank == 0
+
     for _, dt1_item in tqdm(
-        enumerate(data_loader), 
-        total=epoch_iters, 
-        desc=label, 
-        leave=False,  # Don't leave batch bars after completion
-        disable=not show_batch_progress
+        enumerate(data_loader),
+        total=epoch_iters,
+        desc=label,
+        leave=False,
+        disable=not show_batch_progress,
     ):
-        # ten, step, trid, trii, mask, tdi = unload(*dt1_item)
-        # ten, fod, brain, step, trid, trii, mask = unload(*dt1_item)
-        # for convprojmulti
-        # ten_1mm, ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
         ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
 
         if train:
@@ -90,7 +217,7 @@ def epoch_losses(
             if stage == 0:
                 fod_cnn.train()
                 fod_rnn.train()
-            else:  # stage == 1
+            else:
                 fod_cnn.eval()
                 fod_rnn.eval()
                 t1_cnn.train()
@@ -108,34 +235,28 @@ def epoch_losses(
                 fod_cum_loss,
                 t1_dot_loss,
                 t1_cum_loss,
-                # fod_loss,
                 fc_loss,
-                # mid_loss,
             ):
                 return fod_dot_loss
 
-        else:  # stage == 1
+        else:
 
             def loss_fxn(
                 fod_dot_loss,
                 fod_cum_loss,
                 t1_dot_loss,
                 t1_cum_loss,
-                # fod_loss,
                 fc_loss,
-                # mid_loss,
             ):
-                return fc_loss + t1_dot_loss  # + mid_loss
+                return fc_loss + t1_dot_loss
 
-        ## Context management for forward passes with AMP support
-        # FOD models forward pass context
         if train and use_amp:
-            ctx_fod = autocast(device_type='cuda')
+            ctx_fod = autocast(device_type="cuda")
         elif stage == 1 or (stage == 0 and not train):
             ctx_fod = torch.no_grad()
         else:
             ctx_fod = default_context()
-        
+
         with ctx_fod:
             fod_pred = fod_cnn(fod.to(device))
 
@@ -146,38 +267,29 @@ def epoch_losses(
             t1_dot_loss = torch.Tensor([0]).detach()
             t1_cum_loss = torch.Tensor([0]).detach()
             fc_loss = torch.Tensor([0]).detach()
-            
+
         if stage == 1:
-            # T1 models forward pass context
             if train and use_amp:
-                ctx_t1 = autocast(device_type='cuda')
+                ctx_t1 = autocast(device_type="cuda")
             elif train:
                 ctx_t1 = default_context()
             else:
                 ctx_t1 = torch.no_grad()
-                
+
             with ctx_t1:
-                # t1_pred = t1_cnn(ten_1mm.to(device), ten_2mm.to(device))
                 t1_pred = t1_cnn(ten_2mm.to(device))
                 t1_step_pred, _, _, _, t1_fc = t1_rnn(t1_pred, trid.to(device), trii)
                 t1_dot_loss, t1_cum_loss = rnn_criterion(
                     t1_step_pred, step.to(device), mask.to(device)
                 )
-                # cnn_criterion(t1_pred, fod_pred, brain.to(device))
-                # fod_loss = torch.Tensor([0])
                 fc_loss = fc_criterion(t1_fc, fod_fc)
-                # fc_loss, _ = fc_criterion(t1_step_pred, fod_step_pred, mask.to(device))
-                # * trying "end loss" to impose contrastive at output instead of in the middle
-                # mid_loss = torch.Tensor([0])  # mid_criterion(t1_fc, fod_fc)
 
         loss = loss_fxn(
             fod_dot_loss,
             fod_cum_loss,
             t1_dot_loss,
             t1_cum_loss,
-            # fod_loss,
             fc_loss,
-            # mid_loss,
         )
 
         if train:
@@ -189,28 +301,19 @@ def epoch_losses(
                 loss.backward()
                 optimizer.step()
 
-            # scaler.scale(loss).backward()
-            # scaler.step(optimizer)
-            # scaler.update()
-            # optimizer.zero_grad(set_to_none=True)
-
         epoch_loss += loss.item()
         epoch_fod_dot_loss += fod_dot_loss.item()
         epoch_fod_cum_loss += fod_cum_loss.item()
         epoch_t1_dot_loss += t1_dot_loss.item()
         epoch_t1_cum_loss += t1_cum_loss.item()
-        # epoch_fod_loss += fod_loss.item()
         epoch_fc_loss += fc_loss.item()
-        # epoch_mid_loss += mid_loss.item()
 
     epoch_loss /= epoch_iters
     epoch_fod_dot_loss /= epoch_iters
     epoch_fod_cum_loss /= epoch_iters
     epoch_t1_dot_loss /= epoch_iters
     epoch_t1_cum_loss /= epoch_iters
-    # epoch_fod_loss /= epoch_iters
     epoch_fc_loss /= epoch_iters
-    # epoch_mid_loss /= epoch_iters
 
     return (
         epoch_loss,
@@ -218,21 +321,20 @@ def epoch_losses(
         epoch_fod_cum_loss,
         epoch_t1_dot_loss,
         epoch_t1_cum_loss,
-        # epoch_fod_loss,
         epoch_fc_loss,
-        # epoch_mid_loss,
     )
 
 
 def dot2ang(dot):
+    """Convert dot product loss to angle loss in degrees."""
     return 180 / np.pi * np.arccos(1 - dot)
 
 
 def initialize_t1_rnn(t1_rnn, fod_rnn_weights):
+    """Initialize T1 RNN weights from FOD RNN weights."""
     for weights_name in list(fod_rnn_weights.keys()):
         if "fc" in weights_name:
             del fod_rnn_weights[weights_name]
-    # load weights from fod_rnn!
     t1_rnn.load_state_dict(fod_rnn_weights, strict=False)
     for param in (
         list(t1_rnn.rnn.parameters())
@@ -243,18 +345,16 @@ def initialize_t1_rnn(t1_rnn, fod_rnn_weights):
 
 
 def main():
-    # Check if running in distributed mode via environment variables
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        # Increase timeout to 30 minutes to prevent premature NCCL timeouts
-        dist.init_process_group(backend='nccl', timeout=timedelta(minutes=30))
-        local_rank = int(os.environ['LOCAL_RANK'])
+    """Main training loop with distributed support."""
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
+        local_rank = int(os.environ["LOCAL_RANK"])
         rank = dist.get_rank()
         world_size = dist.get_world_size()
-        device = torch.device(f'cuda:{local_rank}')
+        device = torch.device(f"cuda:{local_rank}")
         torch.cuda.set_device(device)
         is_distributed = True
-        
-        # Debug: Print OMP_NUM_THREADS setting
+
         if rank == 0:
             print(f"OMP_NUM_THREADS: {os.environ.get('OMP_NUM_THREADS', 'not set')}")
             print(f"Available CPU cores: {os.cpu_count()}")
@@ -262,27 +362,23 @@ def main():
         local_rank = 0
         rank = 0
         world_size = 1
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         is_distributed = False
-    
+
     parser = configparser.ConfigParser()
     parser.read("train.ini")
     config = parser["Training"]
 
-    # Inputs
-    out_dir = config["out_dir"]
+    out_dir = Path(config["out_dir"])
     resume = config.getboolean("resume")
     start_epoch = config.getint("start_epoch")
     best_fod_epoch = config.getint("best_fod_epoch")
-    stage = config.getint("stage")  # 0 or 1
+    stage = config.getint("stage")
 
     stage_max_epochs = config.getint("stage_max_epochs")
     total_max_epochs = (2 - stage) * stage_max_epochs
     stage_num_epochs_no_change = config.getint("stage_num_epochs_no_change")
 
-    # there is randomness in the validation process
-    # i.e. each time, difference streamlines in the validation subject are used
-    # Thus, I add a tolerence here. If the loss are close, the model parameters are saved
     val_tolerence = 0.02
 
     assert stage == 0 or stage == 1
@@ -293,147 +389,170 @@ def main():
     if stage == 1:
         assert best_fod_epoch < start_epoch
 
-    fod_cnn_file = os.path.join(out_dir, "fod_cnn_{}.pt")
-    fod_rnn_file = os.path.join(out_dir, "fod_rnn_{}.pt")
-    t1_cnn_file = os.path.join(out_dir, "t1_cnn_{}.pt")
-    t1_rnn_file = os.path.join(out_dir, "t1_rnn_{}.pt")
+    fod_cnn_file = out_dir / "fod_cnn_{}.pt"
+    fod_rnn_file = out_dir / "fod_rnn_{}.pt"
+    t1_cnn_file = out_dir / "t1_cnn_{}.pt"
+    t1_rnn_file = out_dir / "t1_rnn_{}.pt"
 
-    fod_optimizer_file = os.path.join(out_dir, "fod_opt_{}.pt")
-    t1_optimizer_file = os.path.join(out_dir, "t1_opt_{}.pt")
+    fod_optimizer_file = out_dir / "fod_opt_{}.pt"
+    t1_optimizer_file = out_dir / "t1_opt_{}.pt"
 
     train_dirs_file = config["train_dirs"]
     val_dirs_file = config["val_dirs"]
-    # test_dirs_file = config["test_dirs"]
 
     num_streamlines = 1000000
     batch_size = 1000
     num_batches = np.ceil(num_streamlines / batch_size).astype(int)
 
-    # Prepare data
     with open(train_dirs_file, "r") as file:
         train_dirs = file.read().splitlines()
 
     with open(val_dirs_file, "r") as file:
         val_dirs = file.read().splitlines()
 
-    # with open(test_dirs_file, "r") as test_dirs_fobj:
-    #     test_dirs = test_dirs_fobj.read().splitlines()
-
     train_dataset = DT1Dataset(train_dirs, num_batches)
     val_dataset = DT1Dataset(val_dirs, num_batches)
-    # test_dataset = DT1Dataset(test_dirs, num_batches)
 
-    # Use DistributedSampler for DDP
     if is_distributed:
-        train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
-        val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-        # drop_last=True ensures all ranks have the same number of batches to prevent NCCL timeout
-        train_loader = DataLoader(train_dataset, batch_size=1, sampler=train_sampler, num_workers=4, drop_last=True)
-        val_loader = DataLoader(val_dataset, batch_size=1, sampler=val_sampler, num_workers=4)
+        train_sampler = DistributedSampler(
+            train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+        )
+        val_sampler = DistributedSampler(
+            val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=1,
+            sampler=train_sampler,
+            num_workers=4,
+            drop_last=True,
+        )
+        val_loader = DataLoader(
+            val_dataset, batch_size=1, sampler=val_sampler, num_workers=4
+        )
     else:
-        train_loader = DataLoader(train_dataset, batch_size=1, num_workers=4, shuffle=True)
+        train_loader = DataLoader(
+            train_dataset, batch_size=1, num_workers=4, shuffle=True
+        )
         val_loader = DataLoader(val_dataset, batch_size=1, num_workers=4, shuffle=False)
-    # test_loader = DataLoader(test_dataset, batch_size=1, num_workers=1, shuffle=False)
 
-    # Train
-    # device = torch.device(gpu_id if torch.cuda.is_available() else "cpu")
-
-    # Initialize models
     fod_cnn = DetCNNFake().to(device)
-    fod_rnn = DetRNN(45, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(device)
+    fod_rnn = DetRNN(45, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(
+        device
+    )
     t1_cnn = DetConvProj(123, 512, kernel_size=7).to(device)
-    t1_rnn = DetRNN(512, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(device)
+    t1_rnn = DetRNN(512, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(
+        device
+    )
 
-    # Wrap with DDP only if distributed AND model has trainable parameters
     if is_distributed:
-        fod_cnn = maybe_wrap_ddp(fod_cnn, device_ids=[local_rank], output_device=local_rank)
-        fod_rnn = maybe_wrap_ddp(fod_rnn, device_ids=[local_rank], output_device=local_rank)
-        t1_cnn = maybe_wrap_ddp(t1_cnn, device_ids=[local_rank], output_device=local_rank)
-        t1_rnn = maybe_wrap_ddp(t1_rnn, device_ids=[local_rank], output_device=local_rank)
+        fod_cnn = maybe_wrap_ddp(
+            fod_cnn, device_ids=[local_rank], output_device=local_rank
+        )
+        fod_rnn = maybe_wrap_ddp(
+            fod_rnn, device_ids=[local_rank], output_device=local_rank
+        )
+        t1_cnn = maybe_wrap_ddp(
+            t1_cnn, device_ids=[local_rank], output_device=local_rank
+        )
+        t1_rnn = maybe_wrap_ddp(
+            t1_rnn, device_ids=[local_rank], output_device=local_rank
+        )
 
-    # * The original learning rate is 1e-3
-    opt0 = optim.AdamW(list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=1e-3)
-    opt1 = optim.AdamW(list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()), lr=1e-3)
+    opt0 = optim.AdamW(list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=3e-4, eps=1e-6)
+    opt1 = optim.AdamW(
+        list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()), lr=3e-4, eps=1e-6)
     opts = [opt0, opt1]
 
     if resume:
         if stage == 0:
             opt0.load_state_dict(
                 torch.load(
-                    fod_optimizer_file.format(start_epoch - 1), map_location=device
+                    str(fod_optimizer_file).format(start_epoch - 1),
+                    map_location=device,
+                    weights_only=False,
                 )
             )
             unwrap_model(fod_cnn).load_state_dict(
-                torch.load(fod_cnn_file.format(start_epoch - 1), map_location=device)
+                torch.load(
+                    str(fod_cnn_file).format(start_epoch - 1),
+                    map_location=device,
+                    weights_only=False,
+                )
             )
             fod_rnn_weights = torch.load(
-                fod_rnn_file.format(start_epoch - 1), map_location=device
+                str(fod_rnn_file).format(start_epoch - 1),
+                map_location=device,
+                weights_only=False,
             )
             unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
-        else:  # stage == 1
+        else:
             unwrap_model(fod_cnn).load_state_dict(
-                torch.load(fod_cnn_file.format(best_fod_epoch), map_location=device)
+                torch.load(
+                    str(fod_cnn_file).format(best_fod_epoch),
+                    map_location=device,
+                    weights_only=False,
+                )
             )
             fod_rnn_weights = torch.load(
-                fod_rnn_file.format(best_fod_epoch), map_location=device
+                str(fod_rnn_file).format(best_fod_epoch),
+                map_location=device,
+                weights_only=False,
             )
             unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
 
-            optimizer_path = t1_optimizer_file.format(start_epoch - 1)
-            previous_rnn_path = t1_rnn_file.format(start_epoch - 1)
+            optimizer_path = str(t1_optimizer_file).format(start_epoch - 1)
+            previous_rnn_path = str(t1_rnn_file).format(start_epoch - 1)
 
-            if os.path.exists(optimizer_path) and os.path.exists(previous_rnn_path):
-                opt1.load_state_dict(torch.load(optimizer_path, map_location=device))
+            if Path(optimizer_path).exists() and Path(previous_rnn_path).exists():
+                opt1.load_state_dict(
+                    torch.load(optimizer_path, map_location=device, weights_only=False)
+                )
                 unwrap_model(t1_rnn).load_state_dict(
-                    torch.load(previous_rnn_path, map_location=device)
+                    torch.load(
+                        previous_rnn_path, map_location=device, weights_only=False
+                    )
                 )
             else:
                 initialize_t1_rnn(unwrap_model(t1_rnn), fod_rnn_weights)
 
-    # cnn_criterion = DetFODLoss()
     fc_criterion = DetFCLoss()
-    # trying "end loss" to impose contrastive at output instead of in the middle
-    # fc_criterion  = DetStepLoss()
     rnn_criterion = DetStepLoss()
-    # mid_criterion = torch.nn.L1Loss()
-
-    # sch0 = MultiStepLR(opt0, [10, 100], gamma=0.1) # start at 1e-3
-    # sch1 = MultiStepLR(opt1, [10, 100], gamma=0.1) # start at 1e-3
-    # schs = [sch0, sch1]
 
     best_loss = math.inf
     best_epoch = "-"
-
-    # Initialize Aim run for experiment tracking (only on rank 0)
     if rank == 0:
         run = Run(experiment="det_rnn_training", repo=out_dir)
-        run['hparams'] = {
-            'stage': stage,
-            'batch_size': batch_size,
-            'out_dir': out_dir,
-            'use_amp': True,
-            'distributed': is_distributed,
-            'world_size': world_size,
+        run["hparams"] = {
+            "stage": stage,
+            "batch_size": batch_size,
+            "out_dir": str(out_dir),
+            "use_amp": True,
+            "distributed": is_distributed,
+            "world_size": world_size,
+            "save_visualizations": True,
+            "viz_interval": 10,  # Save every 10 epochs
         }
     else:
         run = None
 
-    # Initialize GradScaler for AMP
     scaler = GradScaler()
-    use_amp = True  # Set to False to disable automatic mixed precision
+    use_amp = True
 
-    # Initialize stage_last_epoch to avoid undefined variable error
     stage_last_epoch = start_epoch + stage_num_epochs_no_change - 1
 
-    epoch_bar = tqdm(range(start_epoch, total_max_epochs), leave=True, disable=(rank != 0))
+    epoch_bar = tqdm(
+        range(start_epoch, total_max_epochs),
+        leave=True,
+        disable=(rank != 0),
+    )
 
     for epoch in epoch_bar:
-        # Set epoch for DistributedSampler to ensure proper shuffling
         if is_distributed:
             train_sampler.set_epoch(epoch)
-        
+
         epoch_bar.set_description(
-            "Stage: {} | Best Epoch: {} | Current Epoch".format(stage, best_epoch)
+            f"Stage: {stage} | Best Epoch: {best_epoch} | Current Epoch"
         )
 
         (
@@ -442,17 +561,13 @@ def main():
             train_fod_cum_loss,
             train_t1_dot_loss,
             train_t1_cum_loss,
-            # train_fod_loss,
             train_fc_loss,
-            # train_mid_loss,
         ) = epoch_losses(
             train_loader,
             fod_cnn,
             t1_cnn,
             fod_rnn,
             t1_rnn,
-            # cnn_criterion,
-            # mid_criterion,
             fc_criterion,
             rnn_criterion,
             device,
@@ -461,7 +576,7 @@ def main():
             stage,
             scaler,
             use_amp,
-            rank
+            rank,
         )
         (
             val_loss,
@@ -469,17 +584,13 @@ def main():
             val_fod_cum_loss,
             val_t1_dot_loss,
             val_t1_cum_loss,
-            # val_fod_loss,
             val_fc_loss,
-            # val_mid_loss,
         ) = epoch_losses(
             val_loader,
             fod_cnn,
             t1_cnn,
             fod_rnn,
             t1_rnn,
-            # cnn_criterion,
-            # mid_criterion,
             fc_criterion,
             rnn_criterion,
             device,
@@ -488,64 +599,188 @@ def main():
             stage,
             scaler,
             use_amp,
-            rank
+            rank,
         )
+                # Save and track prediction visualizations (rank 0 only, every 10 epochs)
+        if rank == 0 and epoch % 10 == 0:
+            viz_dir = out_dir / "visualizations"
+            viz_dir.mkdir(exist_ok=True)
+            viz_path = viz_dir / f"predictions_epoch_{epoch}.png"
+            
+            # Get a single validation batch for visualization
+            with torch.no_grad():
+                val_iter = iter(val_loader)
+                val_item = next(val_iter)
+                ten_2mm, fod, brain, step, trid, trii, mask = unload(*val_item)
+                
+                fod_pred = fod_cnn(fod.to(device))
+                fod_step_pred, _, _, _, fod_fc = fod_rnn(
+                    fod_pred, trid.to(device), trii
+                )
+                
+                t1_pred = None
+                t1_step_pred = None
+                if stage == 1:
+                    t1_pred = t1_cnn(ten_2mm.to(device))
+                    t1_step_pred, _, _, _, t1_fc = t1_rnn(
+                        t1_pred, trid.to(device), trii
+                    )
+                
+                visualize_predictions(
+                    fod_pred,
+                    fod_step_pred,
+                    step.to(device),
+                    mask.to(device),
+                    t1_pred=t1_pred,
+                    t1_step_pred=t1_step_pred,
+                    save_path=viz_path,
+                    epoch=epoch,
+                )
+                
+                # Track image with Aim
+                run.track(
+                    AimImage(str(viz_path)),
+                    name="Prediction Visualization",
+                    step=epoch,
+                    context={"subset": "validation"}
+                )
 
         train_fod_ang_loss = dot2ang(train_fod_dot_loss)
         val_fod_ang_loss = dot2ang(val_fod_dot_loss)
         train_t1_ang_loss = dot2ang(train_t1_dot_loss)
         val_t1_ang_loss = dot2ang(val_t1_dot_loss)
 
-        # Log metrics with Aim (only on rank 0 to avoid duplicates)
         if rank == 0:
-            run.track(train_loss, name='Total Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_loss, name='Total Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_fod_dot_loss, name='FOD Dot Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_fod_dot_loss, name='FOD Dot Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_fod_ang_loss, name='FOD Angle Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_fod_ang_loss, name='FOD Angle Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_fod_cum_loss, name='FOD Cum Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_fod_cum_loss, name='FOD Cum Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_t1_dot_loss, name='T1 Dot Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_t1_dot_loss, name='T1 Dot Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_t1_ang_loss, name='T1 Angle Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_t1_ang_loss, name='T1 Angle Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_t1_cum_loss, name='T1 Cum Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_t1_cum_loss, name='T1 Cum Loss', step=epoch, context={'subset': 'validation'})
-            run.track(train_fc_loss, name='FC Loss', step=epoch, context={'subset': 'train'})
-            run.track(val_fc_loss, name='FC Loss', step=epoch, context={'subset': 'validation'})
-            # writer.add_scalars(
-            #     "FOD Loss", {"Train": train_fod_loss, "Validation": val_fod_loss}, epoch
-            # )
-            # writer.add_scalars(
-            #     "Mid Loss", {"Train": train_mid_loss, "Validation": val_mid_loss}, epoch
-            # )
+            run.track(
+                train_loss, name="Total Loss", step=epoch, context={"subset": "train"}
+            )
+            run.track(
+                val_loss,
+                name="Total Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_fod_dot_loss,
+                name="FOD Dot Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_fod_dot_loss,
+                name="FOD Dot Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_fod_ang_loss,
+                name="FOD Angle Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_fod_ang_loss,
+                name="FOD Angle Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_fod_cum_loss,
+                name="FOD Cum Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_fod_cum_loss,
+                name="FOD Cum Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_t1_dot_loss,
+                name="T1 Dot Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_t1_dot_loss,
+                name="T1 Dot Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_t1_ang_loss,
+                name="T1 Angle Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_t1_ang_loss,
+                name="T1 Angle Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_t1_cum_loss,
+                name="T1 Cum Loss",
+                step=epoch,
+                context={"subset": "train"},
+            )
+            run.track(
+                val_t1_cum_loss,
+                name="T1 Cum Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
+            run.track(
+                train_fc_loss, name="FC Loss", step=epoch, context={"subset": "train"}
+            )
+            run.track(
+                val_fc_loss,
+                name="FC Loss",
+                step=epoch,
+                context={"subset": "validation"},
+            )
 
         if epoch % 50 == 0 and rank == 0:
             if stage == 0:
-                torch.save(unwrap_model(fod_cnn).state_dict(), fod_cnn_file.format(epoch))
-                torch.save(unwrap_model(fod_rnn).state_dict(), fod_rnn_file.format(epoch))
-                torch.save(opt0.state_dict(), fod_optimizer_file.format(epoch))
+                torch.save(
+                    unwrap_model(fod_cnn).state_dict(), str(fod_cnn_file).format(epoch)
+                )
+                torch.save(
+                    unwrap_model(fod_rnn).state_dict(), str(fod_rnn_file).format(epoch)
+                )
+                torch.save(opt0.state_dict(), str(fod_optimizer_file).format(epoch))
             else:
-                torch.save(unwrap_model(t1_cnn).state_dict(), t1_cnn_file.format(epoch))
-                torch.save(unwrap_model(t1_rnn).state_dict(), t1_rnn_file.format(epoch))
-                torch.save(opt1.state_dict(), t1_optimizer_file.format(epoch))
+                torch.save(unwrap_model(t1_cnn).state_dict(), str(t1_cnn_file).format(epoch))
+                torch.save(unwrap_model(t1_rnn).state_dict(), str(t1_rnn_file).format(epoch))
+                torch.save(opt1.state_dict(), str(t1_optimizer_file).format(epoch))
 
         if val_loss - val_tolerence < best_loss:
             if val_loss < best_loss:
                 best_loss = val_loss
                 best_epoch = epoch
-                # always computed in first epoch of new stage since best_loss = inf
-                # -1 to account for 0 indexing
-                if rank == 0:  # Only save from rank 0
+                if rank == 0:
                     if stage == 0:
-                        torch.save(unwrap_model(fod_cnn).state_dict(), fod_cnn_file.format("best"))
-                        torch.save(unwrap_model(fod_rnn).state_dict(), fod_rnn_file.format("best"))
-                        torch.save(opt0.state_dict(), fod_optimizer_file.format("best"))
+                        torch.save(
+                            unwrap_model(fod_cnn).state_dict(),
+                            str(fod_cnn_file).format("best"),
+                        )
+                        torch.save(
+                            unwrap_model(fod_rnn).state_dict(),
+                            str(fod_rnn_file).format("best"),
+                        )
+                        torch.save(opt0.state_dict(), str(fod_optimizer_file).format("best"))
                     else:
-                        torch.save(unwrap_model(t1_cnn).state_dict(), t1_cnn_file.format("best"))
-                        torch.save(unwrap_model(t1_rnn).state_dict(), t1_rnn_file.format("best"))
-                        torch.save(opt1.state_dict(), t1_optimizer_file.format("best"))
+                        torch.save(
+                            unwrap_model(t1_cnn).state_dict(),
+                            str(t1_cnn_file).format("best"),
+                        )
+                        torch.save(
+                            unwrap_model(t1_rnn).state_dict(),
+                            str(t1_rnn_file).format("best"),
+                        )
+                        torch.save(opt1.state_dict(), str(t1_optimizer_file).format("best"))
                 stage_last_epoch = np.min(
                     (
                         epoch + stage_num_epochs_no_change - 1,
@@ -557,28 +792,28 @@ def main():
         if epoch == stage_last_epoch:
             if rank == 0:
                 print(
-                    "\nStage: {} | Best Epoch: {} | Last Epoch: {}".format(
-                        stage, best_epoch, epoch
-                    )
+                    f"\nStage: {stage} | Best Epoch: {best_epoch} | Last Epoch: {epoch}"
                 )
             stage += 1
             if stage == 1:
                 unwrap_model(fod_cnn).load_state_dict(
-                    torch.load(fod_cnn_file.format("best"), map_location=device)
+                    torch.load(
+                        str(fod_cnn_file).format("best"),
+                        map_location=device,
+                        weights_only=False,
+                    )
                 )
                 fod_rnn_weights = torch.load(
-                    fod_rnn_file.format("best"), map_location=device
+                    str(fod_rnn_file).format("best"), map_location=device, weights_only=False
                 )
                 unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
                 initialize_t1_rnn(unwrap_model(t1_rnn), fod_rnn_weights)
             if stage > 1:
                 break
-            # * +1 to account for -1 above for zero indexing
             stage_max_epochs = epoch + stage_max_epochs + 1
             best_loss = math.inf
             best_epoch = "-"
-    
-    # Cleanup distributed training only if initialized
+
     if is_distributed:
         dist.destroy_process_group()
 
