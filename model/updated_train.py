@@ -1,6 +1,7 @@
 from aim import Image as AimImage
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend for saving files
+
+matplotlib.use("Agg")  # Non-interactive backend for saving files
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
@@ -35,6 +36,7 @@ from modules import (
 
 warnings.simplefilter("ignore", category=UserWarning)
 
+
 def maybe_wrap_ddp(model, device_ids, output_device):
     """Wrap model with DDP only if it has parameters requiring gradients."""
     if any(p.requires_grad for p in model.parameters()):
@@ -43,7 +45,7 @@ def maybe_wrap_ddp(model, device_ids, output_device):
             device_ids=device_ids,
             output_device=output_device,
             find_unused_parameters=True,
-            static_graph=True
+            static_graph=True,
         )
     return model
 
@@ -52,48 +54,51 @@ def unwrap_model(model):
     """Return the underlying module, handling both DDP-wrapped and plain models."""
     return model.module if isinstance(model, DDP) else model
 
+
 def visualize_predictions(
     fod_pred,
     fod_step_pred,
     step,
     mask,
+    stage,
     t1_pred=None,
     t1_step_pred=None,
     save_path=None,
     epoch=None,
-    slice_dim=2,  # Dimension to extract middle slice from (0=sagittal, 1=coronal, 2=axial)
-    rotation_k=1
+    slice_dim=2,
+    rotation_k=1,  # 270° clockwise = 1 × 90° counter-clockwise
 ):
-    """Generate and save visualization of 3D model predictions using orthogonal slices.
+    """Generate and save visualization of 3D CNN predictions and 1D/2D RNN outputs.
 
     Args:
         fod_pred: FOD CNN predictions [B, C, D, H, W] or [B, D, H, W].
-        fod_step_pred: FOD RNN step predictions.
-        step: Ground truth step directions.
-        mask: Valid streamline mask.
+        fod_step_pred: FOD RNN step predictions [B, num_steps, 3] or [B, 3, num_steps].
+        step: Ground truth step directions [B, num_steps, 3] or [B, 3, num_steps].
+        mask: Valid streamline mask [B, D, H, W] or [B, 1, D, H, W].
         t1_pred: T1 CNN predictions (Stage 1 only).
         t1_step_pred: T1 RNN step predictions (Stage 1 only).
         save_path: Path to save the figure.
         epoch: Current epoch number.
-        slice_dim: Which dimension to use for middle slice extraction.
+        slice_dim: Which dimension to use for middle slice extraction (for 3D volumes).
+        rotation_k: Number of 90° counter-clockwise rotations for 3D slices.
     """
+
     def get_middle_slice(tensor_3d, dim):
         """Extract middle slice from 3D/4D tensor along specified dimension."""
         if tensor_3d.ndim == 4:  # [C, D, H, W]
-            # Take middle index along specified spatial dim (1,2,3 correspond to D,H,W)
             if dim == 0:  # axial: middle of depth
-                return tensor_3d[:, tensor_3d.shape[1]//2, :, :].mean(axis=0)
+                return tensor_3d[:, tensor_3d.shape[1] // 2, :, :].mean(axis=0)
             elif dim == 1:  # sagittal: middle of height
-                return tensor_3d[:, :, tensor_3d.shape[2]//2, :].mean(axis=0)
+                return tensor_3d[:, :, tensor_3d.shape[2] // 2, :].mean(axis=0)
             else:  # coronal: middle of width
-                return tensor_3d[:, :, :, tensor_3d.shape[3]//2].mean(axis=0)
+                return tensor_3d[:, :, :, tensor_3d.shape[3] // 2].mean(axis=0)
         elif tensor_3d.ndim == 3:  # [D, H, W]
             if dim == 0:
-                return tensor_3d[tensor_3d.shape[0]//2, :, :]
+                return tensor_3d[tensor_3d.shape[0] // 2, :, :]
             elif dim == 1:
-                return tensor_3d[:, tensor_3d.shape[1]//2, :]
+                return tensor_3d[:, tensor_3d.shape[1] // 2, :]
             else:
-                return tensor_3d[:, :, tensor_3d.shape[2]//2]
+                return tensor_3d[:, :, tensor_3d.shape[2] // 2]
         return tensor_3d
 
     def normalize_for_viz(arr):
@@ -108,50 +113,156 @@ def visualize_predictions(
         """Rotate slice by k * 90 degrees counter-clockwise."""
         return np.rot90(arr, k=k)
 
+    def plot_streamline_components(
+        ax, step_data, title, color_pred="blue", color_gt="red"
+    ):
+        """Plot streamline direction components (x, y, z) as line plots."""
+        # step_data shape: [num_steps, 3] or [3, num_steps]
+        if step_data.shape[0] == 3 and step_data.ndim == 2:
+            # Transpose to [num_steps, 3]
+            step_data = step_data.T
+
+        num_steps = step_data.shape[0]
+        steps = np.arange(num_steps)
+
+        # Plot each component
+        ax.plot(steps, step_data[:, 0], label="X", color=color_pred, linewidth=1)
+        ax.plot(steps, step_data[:, 1], label="Y", color=color_gt, linewidth=1)
+        ax.plot(steps, step_data[:, 2], label="Z", color="green", linewidth=1)
+
+        ax.set_xlabel("Streamline Step")
+        ax.set_ylabel("Direction Component")
+        ax.set_title(title)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, num_steps)
+
+    def plot_streamline_heatmap(ax, step_data, title, cmap="viridis"):
+        """Plot streamline data as a 2D heatmap."""
+        if step_data.shape[0] == 3 and step_data.ndim == 2:
+            step_data = step_data.T  # [num_steps, 3]
+
+        step_norm = normalize_for_viz(step_data)
+        im = ax.imshow(step_norm.T, aspect="auto", cmap=cmap, interpolation="nearest")
+        ax.set_xlabel("Streamline Step")
+        ax.set_ylabel("Component (X/Y/Z)")
+        ax.set_yticks([0, 1, 2])
+        ax.set_yticklabels(["X", "Y", "Z"])
+        ax.set_title(title)
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    def plot_orthogonal_3d(ax_row, data, title_prefix):
+        """Plot 3D volume as three orthogonal middle slices with rotation."""
+        for col, dim in enumerate([0, 1, 2]):
+            slice_data = get_middle_slice(data, dim)
+            slice_rotated = rotate_slice(slice_data, rotation_k)
+            slice_norm = normalize_for_viz(slice_rotated)
+            im = ax_row[col].imshow(slice_norm, cmap="gist_yarg")
+            ax_row[col].set_title(
+                f"{title_prefix} - {'Sagittal' if col == 0 else 'Coronal' if col == 1 else 'Axial'}"
+            )
+            ax_row[col].axis("off")
+            plt.colorbar(im, ax=ax_row[col], fraction=0.046, pad=0.04)
+
     # Detach and move to CPU
     fod_pred_np = fod_pred.detach().cpu().numpy()
     fod_step_pred_np = fod_step_pred.detach().cpu().numpy()
     step_np = step.detach().cpu().numpy()
     mask_np = mask.detach().cpu().numpy()
-    
-    if t1_pred is not None:
-        t1_pred_np = t1_pred.detach().cpu().numpy()
-    if t1_step_pred is not None:
-        t1_step_pred_np = t1_step_pred.detach().cpu().numpy()
-    
-    # Create figure: 3 rows (FOD, T1, Mask/GT) x 3 columns (axial, sagittal, coronal)
-    fig, axes = plt.subplots(3, 3, figsize=(12, 12))
-    
-    # Helper to plot three orthogonal views
-    def plot_orthogonal(ax_row, data, title_prefix):
-        for col, dim in enumerate([0, 1, 2]):
-            slice_data = get_middle_slice(data, dim)
-            slice_rotated = rotate_slice(slice_data, rotation_k)
-            slice_norm = normalize_for_viz(slice_rotated)
-            im = ax_row[col].imshow(slice_norm, cmap='viridis')
-            ax_row[col].set_title(f'{title_prefix} - {"Sagittal" if col==0 else "Coronal" if col==1 else "Axial"}')
-            ax_row[col].axis('off')
-            plt.colorbar(im, ax=ax_row[col], fraction=0.046, pad=0.04)
-    
-    # Row 0: FOD predictions
-    plot_orthogonal(axes[0], fod_pred_np[0], 'FOD CNN Pred')
-    
-    # Row 1: FOD RNN step predictions vs Ground Truth
-    plot_orthogonal(axes[1], fod_step_pred_np[0], 'FOD RNN Step Pred')
-    # Overlay ground truth on the same row, different columns handled above
-    # Add GT as separate row or overlay - let's add as row 2 for clarity
-    
-    # Row 2: Ground Truth Step
-    plot_orthogonal(axes[2], step_np[0], 'Ground Truth Step')
-    
-    plt.suptitle(f'Epoch {epoch} - Validation Predictions', fontsize=16, y=1.02)
+
+    t1_pred_np = t1_pred.detach().cpu().numpy() if t1_pred is not None else None
+    t1_step_pred_np = (
+        t1_step_pred.detach().cpu().numpy() if t1_step_pred is not None else None
+    )
+
+    # Detect data types by shape
+    is_fod_step_1d = (
+        fod_step_pred_np[0].ndim <= 2 and fod_step_pred_np[0].shape[-1] == 3
+    )
+    is_step_1d = step_np[0].ndim <= 2 and step_np[0].shape[-1] == 3
+    is_t1_step_1d = (
+        t1_step_pred_np is not None
+        and t1_step_pred_np[0].ndim <= 2
+        and t1_step_pred_np[0].shape[-1] == 3
+    )
+
+    # Create figure: 4 rows (FOD CNN, FOD RNN, GT, T1 CNN/RNN) x 3 columns
+    fig, axes = plt.subplots(4, 3, figsize=(15, 16))
+
+    # Row 0: FOD CNN predictions (3D volume - orthogonal slices)
+    plot_orthogonal_3d(axes[0], fod_pred_np[0], "FOD CNN Pred")
+
+    # Row 1: FOD RNN step predictions (1D streamline - line plot or heatmap)
+    if is_fod_step_1d:
+        # Use line plot for directional components
+        plot_streamline_components(
+            axes[1, 0], fod_step_pred_np[0], "FOD RNN: X/Y/Z Components"
+        )
+        # Use heatmap for intensity view
+        plot_streamline_heatmap(axes[1, 1], fod_step_pred_np[0], "FOD RNN: Heatmap")
+        # Show magnitude
+        magnitudes = (
+            np.linalg.norm(fod_step_pred_np[0], axis=-1)
+            if fod_step_pred_np[0].shape[-1] == 3
+            else fod_step_pred_np[0].squeeze()
+        )
+        axes[1, 2].plot(
+            np.arange(len(magnitudes)), magnitudes, color="purple", linewidth=1.5
+        )
+        axes[1, 2].set_xlabel("Streamline Step")
+        axes[1, 2].set_ylabel("Magnitude")
+        axes[1, 2].set_title("FOD RNN: Direction Magnitude")
+        axes[1, 2].grid(True, alpha=0.3)
+    else:
+        # Fallback to orthogonal slices if not 1D
+        plot_orthogonal_3d(axes[1], fod_step_pred_np[0], "FOD RNN Pred")
+
+    # Row 2: Ground Truth Step (same visualization as predictions for comparison)
+    if is_step_1d:
+        plot_streamline_components(
+            axes[2, 0],
+            step_np[0],
+            "Ground Truth: X/Y/Z Components",
+            color_pred="red",
+            color_gt="blue",
+        )
+        plot_streamline_heatmap(
+            axes[2, 1], step_np[0], "Ground Truth: Heatmap")
+        magnitudes = (
+            np.linalg.norm(step_np[0], axis=-1)
+            if step_np[0].shape[-1] == 3
+            else step_np[0].squeeze()
+        )
+        axes[2, 2].plot(
+            np.arange(len(magnitudes)), magnitudes, color="orange", linewidth=1.5
+        )
+        axes[2, 2].set_xlabel("Streamline Step")
+        axes[2, 2].set_ylabel("Magnitude")
+        axes[2, 2].set_title("Ground Truth: Direction Magnitude")
+        axes[2, 2].grid(True, alpha=0.3)
+    else:
+        plot_orthogonal_3d(axes[2], step_np[0], "Ground Truth Step")
+
+    # Row 3: T1 predictions (Stage 1 only) or mask
+    if stage == 1 and t1_pred is not None:
+        plot_orthogonal_3d(axes[3], t1_pred_np[0], "T1 CNN Pred")
+    else:
+        for col in range(3):
+            axes[3, col].text(
+                0.5, 0.5, f"Stage 0\nMask: {mask_np[0].shape}", 
+                ha="center", va="center", fontsize=12, style="italic"
+            )
+            axes[3, col].axis("off")
+
+    plt.suptitle(f"Epoch {epoch} - Validation Predictions", fontsize=16, y=0.995)
     plt.tight_layout()
-    
+
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight', facecolor='white')
+        plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    
+
     return save_path
+
 
 def epoch_losses(
     data_loader,
@@ -459,9 +570,14 @@ def main():
             t1_rnn, device_ids=[local_rank], output_device=local_rank
         )
 
-    opt0 = optim.AdamW(list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=3e-4, eps=1e-6)
+    opt0 = optim.AdamW(
+        list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=3e-4, eps=1e-6
+    )
     opt1 = optim.AdamW(
-        list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()), lr=3e-4, eps=1e-6)
+        list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()),
+        lr=3e-4,
+        eps=1e-6,
+    )
     opts = [opt0, opt1]
 
     if resume:
@@ -601,23 +717,23 @@ def main():
             use_amp,
             rank,
         )
-                # Save and track prediction visualizations (rank 0 only, every 10 epochs)
-        if rank == 0 and epoch % 10 == 0:
+        # Save and track prediction visualizations (rank 0 only, every 10 epochs)
+        if rank == 0 and epoch % 8 == 0:
             viz_dir = out_dir / "visualizations"
             viz_dir.mkdir(exist_ok=True)
             viz_path = viz_dir / f"predictions_epoch_{epoch}.png"
-            
+
             # Get a single validation batch for visualization
             with torch.no_grad():
                 val_iter = iter(val_loader)
                 val_item = next(val_iter)
                 ten_2mm, fod, brain, step, trid, trii, mask = unload(*val_item)
-                
+
                 fod_pred = fod_cnn(fod.to(device))
                 fod_step_pred, _, _, _, fod_fc = fod_rnn(
                     fod_pred, trid.to(device), trii
                 )
-                
+
                 t1_pred = None
                 t1_step_pred = None
                 if stage == 1:
@@ -625,24 +741,25 @@ def main():
                     t1_step_pred, _, _, _, t1_fc = t1_rnn(
                         t1_pred, trid.to(device), trii
                     )
-                
+
                 visualize_predictions(
                     fod_pred,
                     fod_step_pred,
                     step.to(device),
                     mask.to(device),
+                    stage=stage,
                     t1_pred=t1_pred,
                     t1_step_pred=t1_step_pred,
                     save_path=viz_path,
                     epoch=epoch,
                 )
-                
+
                 # Track image with Aim
                 run.track(
                     AimImage(str(viz_path)),
                     name="Prediction Visualization",
                     step=epoch,
-                    context={"subset": "validation"}
+                    context={"subset": "validation"},
                 )
 
         train_fod_ang_loss = dot2ang(train_fod_dot_loss)
@@ -742,7 +859,7 @@ def main():
                 context={"subset": "validation"},
             )
 
-        if epoch % 50 == 0 and rank == 0:
+        if epoch % 5 == 0 and rank == 0:
             if stage == 0:
                 torch.save(
                     unwrap_model(fod_cnn).state_dict(), str(fod_cnn_file).format(epoch)
@@ -752,8 +869,12 @@ def main():
                 )
                 torch.save(opt0.state_dict(), str(fod_optimizer_file).format(epoch))
             else:
-                torch.save(unwrap_model(t1_cnn).state_dict(), str(t1_cnn_file).format(epoch))
-                torch.save(unwrap_model(t1_rnn).state_dict(), str(t1_rnn_file).format(epoch))
+                torch.save(
+                    unwrap_model(t1_cnn).state_dict(), str(t1_cnn_file).format(epoch)
+                )
+                torch.save(
+                    unwrap_model(t1_rnn).state_dict(), str(t1_rnn_file).format(epoch)
+                )
                 torch.save(opt1.state_dict(), str(t1_optimizer_file).format(epoch))
 
         if val_loss - val_tolerence < best_loss:
@@ -770,7 +891,9 @@ def main():
                             unwrap_model(fod_rnn).state_dict(),
                             str(fod_rnn_file).format("best"),
                         )
-                        torch.save(opt0.state_dict(), str(fod_optimizer_file).format("best"))
+                        torch.save(
+                            opt0.state_dict(), str(fod_optimizer_file).format("best")
+                        )
                     else:
                         torch.save(
                             unwrap_model(t1_cnn).state_dict(),
@@ -780,7 +903,9 @@ def main():
                             unwrap_model(t1_rnn).state_dict(),
                             str(t1_rnn_file).format("best"),
                         )
-                        torch.save(opt1.state_dict(), str(t1_optimizer_file).format("best"))
+                        torch.save(
+                            opt1.state_dict(), str(t1_optimizer_file).format("best")
+                        )
                 stage_last_epoch = np.min(
                     (
                         epoch + stage_num_epochs_no_change - 1,
@@ -804,7 +929,9 @@ def main():
                     )
                 )
                 fod_rnn_weights = torch.load(
-                    str(fod_rnn_file).format("best"), map_location=device, weights_only=False
+                    str(fod_rnn_file).format("best"),
+                    map_location=device,
+                    weights_only=False,
                 )
                 unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
                 initialize_t1_rnn(unwrap_model(t1_rnn), fod_rnn_weights)
