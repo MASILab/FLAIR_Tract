@@ -157,7 +157,7 @@ def visualize_predictions(
             slice_data = get_middle_slice(data, dim)
             slice_rotated = rotate_slice(slice_data, rotation_k)
             slice_norm = normalize_for_viz(slice_rotated)
-            im = ax_row[col].imshow(slice_norm, cmap="gist_yarg")
+            im = ax_row[col].imshow(slice_norm, cmap="gist_yarg", vmin=0.0, vmax=1.0)
             ax_row[col].set_title(
                 f"{title_prefix} - {'Sagittal' if col == 0 else 'Coronal' if col == 1 else 'Axial'}"
             )
