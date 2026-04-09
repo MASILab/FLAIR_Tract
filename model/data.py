@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import os
 =======
 # Dataset Definitions
@@ -9,7 +8,6 @@ import os
 
 # Set Up
 
->>>>>>> 28f1f798228a5e6cce958fc63dcb545323809b18
 import torch
 import torch.nn as nn
 import numpy as np
