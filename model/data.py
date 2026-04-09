@@ -1,4 +1,15 @@
+<<<<<<< HEAD
 import os
+=======
+# Dataset Definitions
+# Written by Leon Cai(GOAT)
+# Modified by Tian Yu
+# MASI Lab
+# Summer 2023
+
+# Set Up
+
+>>>>>>> 28f1f798228a5e6cce958fc63dcb545323809b18
 import torch
 import torch.nn as nn
 import numpy as np
