@@ -5,6 +5,7 @@ description = "Flair tractography journal extension implementation."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aim>=3.29.1",
     "dipy>=1.9.0",
     "fire>=0.7.1",
     "more-itertools>=10.8.0",
@@ -26,6 +27,7 @@ dev = [
     "ipython>=9.7.0",
     "snakemake-logger-plugin-snkmt>=0.1.5",
     "spython>=0.3.14",
+    "ssh-para>=1.7.53",
 ]
 
 [tool.uv.sources]
