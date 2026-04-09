@@ -17,7 +17,7 @@ script_path = conf["script_path"]
 
 
 def run_dipy_slr_recobundles(
-    search_dir,
+    search_dir=None,
     parallel_dry_run=False,
     print_chain_cmd=False,
     atlases_pattern=atlases_pattern,
@@ -25,11 +25,21 @@ def run_dipy_slr_recobundles(
     subj_pattern="T1_test50to250.trk",
     threads_per_job=4,
     jobs=None,
+    in_file=None
 ):
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as tmp:
         input_list_path = tmp.name
-    fdfind_args = ["-t", "f", subj_pattern, search_dir, "--absolute-path"]
-    (fdfind[fdfind_args] > input_list_path).run()
+        if in_file is None:
+            fdfind_args = ["-t", "f", subj_pattern, search_dir, "--absolute-path"]
+            (fdfind[fdfind_args] > input_list_path).run()
+        else:
+             with open(in_file, "r") as infile:
+                 l = []
+                 for folder in infile.readlines():
+                     fdfind_args = ["-t", "f", subj_pattern, folder.strip(), "--absolute-path"]
+                     _,pth,_ = fdfind[fdfind_args].run()
+                     l.append(pth)
+             tmp.writelines(l)
 
     total_cpus = os.cpu_count() or 1
     if jobs is None:

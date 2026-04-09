@@ -520,9 +520,11 @@ class DetStepLoss(nn.Module):
     def forward(self, yp, y, m):
         mask = m / torch.sum(m)
 
+        # cosine loss for individual step
         dot_loss = 1 - torch.sum(yp * y, dim=-1)
         dot_loss_masked = torch.sum(dot_loss * mask)
 
+        # trajectory loss for streamline
         cum_loss = torch.sqrt(
             torch.sum((torch.cumsum(yp, dim=0) - torch.cumsum(y, dim=0)) ** 2, dim=-1)
             + 1e-8

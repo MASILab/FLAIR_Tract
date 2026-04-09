@@ -1,5 +1,6 @@
 from plumbum import local
 from pathlib import Path
+
 import fire
 
 dipy_slr = local["dipy_slr"]
@@ -36,7 +37,7 @@ def run_pipeline(
         recobundles_out_dir.mkdir()
     dipy_recobundles_arguments = [
         moved_trk,
-        tract_atlases,
+        tract_atlases + "/*.trk",
         "--force",
         "--mix_names",
         "--out_dir",

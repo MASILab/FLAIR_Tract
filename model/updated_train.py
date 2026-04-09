@@ -1,5 +1,6 @@
 from aim import Image as AimImage
 import matplotlib
+import gc
 
 matplotlib.use("Agg")  # Non-interactive backend for saving files
 import matplotlib.pyplot as plt
@@ -17,7 +18,8 @@ import warnings
 # Aim import for experiment tracking
 from aim import Run
 
-from tqdm.rich import tqdm
+from tqdm.rich import tqdm  
+from tqdm import TqdmExperimentalWarning
 import numpy as np
 import math
 import os
@@ -45,7 +47,7 @@ def maybe_wrap_ddp(model, device_ids, output_device):
             device_ids=device_ids,
             output_device=output_device,
             find_unused_parameters=True,
-            static_graph=True,
+            static_graph=False,
         )
     return model
 
@@ -261,6 +263,16 @@ def visualize_predictions(
         plt.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
+    del fod_pred_np, fod_step_pred_np, step_np, mask_np
+    if t1_pred_np is not None:
+        del t1_pred_np
+    if t1_step_pred_np is not None:
+        del t1_step_pred_np
+    
+    gc.collect()
+    
+    return save_path
+
     return save_path
 
 
@@ -274,6 +286,7 @@ def epoch_losses(
     rnn_criterion,
     device,
     optimizer,
+    scheduler,
     label,
     stage,
     scaler,
@@ -292,6 +305,7 @@ def epoch_losses(
         rnn_criterion: Criterion for RNN loss.
         device: Torch device.
         optimizer: Optimizer.
+        scheduler: Scheduler.
         label: Label for progress bar (e.g., 'Train', 'Validation').
         stage: Training stage (0 or 1).
         scaler: GradScaler for AMP.
@@ -301,6 +315,8 @@ def epoch_losses(
     Returns:
         Tuple of average losses.
     """
+    
+    warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     train = "train" in label.lower()
 
     epoch_loss = 0
@@ -314,16 +330,7 @@ def epoch_losses(
 
     show_batch_progress = rank == 0
 
-    for _, dt1_item in tqdm(
-        enumerate(data_loader),
-        total=epoch_iters,
-        desc=label,
-        leave=False,
-        disable=not show_batch_progress,
-    ):
-        ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
-
-        if train:
+    if train:
             optimizer.zero_grad(set_to_none=True)
             if stage == 0:
                 fod_cnn.train()
@@ -331,15 +338,19 @@ def epoch_losses(
             else:
                 fod_cnn.eval()
                 fod_rnn.eval()
+                for param in fod_cnn.parameters():
+                    param.requires_grad = False
+                for param in fod_rnn.parameters():
+                    param.requires_grad = False
                 t1_cnn.train()
                 t1_rnn.train()
-        else:
+    else:
             fod_cnn.eval()
             t1_cnn.eval()
             fod_rnn.eval()
             t1_rnn.eval()
 
-        if stage == 0:
+    if stage == 0:
 
             def loss_fxn(
                 fod_dot_loss,
@@ -350,7 +361,7 @@ def epoch_losses(
             ):
                 return fod_dot_loss
 
-        else:
+    else:
 
             def loss_fxn(
                 fod_dot_loss,
@@ -361,12 +372,33 @@ def epoch_losses(
             ):
                 return fc_loss + t1_dot_loss
 
+
+    if train and use_amp:
+        ctx_fod = autocast(device_type="cuda")
+    elif stage == 1 or (stage == 0 and not train):
+        ctx_fod = torch.no_grad()
+    else:
+        ctx_fod = default_context()
+
+        
+    if stage == 1:
         if train and use_amp:
-            ctx_fod = autocast(device_type="cuda")
-        elif stage == 1 or (stage == 0 and not train):
-            ctx_fod = torch.no_grad()
+            ctx_t1 = autocast(device_type="cuda")
+        elif train:
+            ctx_t1 = default_context()
         else:
-            ctx_fod = default_context()
+            ctx_t1 = torch.no_grad()
+    
+    warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
+    for _, dt1_item in tqdm(
+        enumerate(data_loader),
+        total=epoch_iters,
+        desc=label,
+        leave=False,
+        disable=not show_batch_progress,
+    ):
+        ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
+
 
         with ctx_fod:
             fod_pred = fod_cnn(fod.to(device))
@@ -380,13 +412,6 @@ def epoch_losses(
             fc_loss = torch.Tensor([0]).detach()
 
         if stage == 1:
-            if train and use_amp:
-                ctx_t1 = autocast(device_type="cuda")
-            elif train:
-                ctx_t1 = default_context()
-            else:
-                ctx_t1 = torch.no_grad()
-
             with ctx_t1:
                 t1_pred = t1_cnn(ten_2mm.to(device))
                 t1_step_pred, _, _, _, t1_fc = t1_rnn(t1_pred, trid.to(device), trii)
@@ -412,6 +437,9 @@ def epoch_losses(
                 loss.backward()
                 optimizer.step()
 
+            scheduler.step()
+            
+
         epoch_loss += loss.item()
         epoch_fod_dot_loss += fod_dot_loss.item()
         epoch_fod_cum_loss += fod_cum_loss.item()
@@ -419,6 +447,7 @@ def epoch_losses(
         epoch_t1_cum_loss += t1_cum_loss.item()
         epoch_fc_loss += fc_loss.item()
 
+        
     epoch_loss /= epoch_iters
     epoch_fod_dot_loss /= epoch_iters
     epoch_fod_cum_loss /= epoch_iters
@@ -458,7 +487,7 @@ def initialize_t1_rnn(t1_rnn, fod_rnn_weights):
 def main():
     """Main training loop with distributed support."""
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
+        dist.init_process_group(backend="nccl", timeout=timedelta(minutes=180))
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = dist.get_rank()
         world_size = dist.get_world_size()
@@ -477,7 +506,7 @@ def main():
         is_distributed = False
 
     parser = configparser.ConfigParser()
-    parser.read("train.ini")
+    parser.read("train.v2.ini")
     config = parser["Training"]
 
     out_dir = Path(config["out_dir"])
@@ -506,10 +535,14 @@ def main():
     t1_rnn_file = out_dir / "t1_rnn_{}.pt"
 
     fod_optimizer_file = out_dir / "fod_opt_{}.pt"
+    fod_scheduler_file = out_dir / "fod_sch_{}.pt"
     t1_optimizer_file = out_dir / "t1_opt_{}.pt"
+    t1_scheduler_file = out_dir / "t1_sch_{}.pt"
 
     train_dirs_file = config["train_dirs"]
     val_dirs_file = config["val_dirs"]
+    derivatives_data_path = config["deriv_data_path"]
+    cache_root = config["cache_root"]
 
     num_streamlines = 1000000
     batch_size = 1000
@@ -521,8 +554,8 @@ def main():
     with open(val_dirs_file, "r") as file:
         val_dirs = file.read().splitlines()
 
-    train_dataset = DT1Dataset(train_dirs, num_batches)
-    val_dataset = DT1Dataset(val_dirs, num_batches)
+    train_dataset = DT1Dataset(train_dirs, num_batches, cache_root=cache_root + "_train", base_data_path=derivatives_data_path)
+    val_dataset = DT1Dataset(val_dirs, num_batches, cache_root=cache_root + "_val", base_data_path=derivatives_data_path)
 
     if is_distributed:
         train_sampler = DistributedSampler(
@@ -535,11 +568,12 @@ def main():
             train_dataset,
             batch_size=1,
             sampler=train_sampler,
-            num_workers=4,
+            num_workers=1,
             drop_last=True,
+            persistent_workers=False
         )
         val_loader = DataLoader(
-            val_dataset, batch_size=1, sampler=val_sampler, num_workers=4
+            val_dataset, batch_size=1, sampler=val_sampler, num_workers=1, persistent_workers=False
         )
     else:
         train_loader = DataLoader(
@@ -570,21 +604,36 @@ def main():
             t1_rnn, device_ids=[local_rank], output_device=local_rank
         )
 
+    epochs_up = 5  # Half of 10-epoch cycle
+    step_size_up = num_batches * epochs_up  # 1000 * 5 = 5000
+
     opt0 = optim.AdamW(
         list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=3e-4, eps=1e-6
     )
+    scheduler0 = torch.optim.lr_scheduler.CyclicLR(opt0, base_lr=1e-4, max_lr=1e-3, step_size_up=step_size_up, mode='triangular2', scale_mode='cycle', cycle_momentum=False)
+
     opt1 = optim.AdamW(
         list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()),
         lr=3e-4,
         eps=1e-6,
     )
+    scheduler1 = torch.optim.lr_scheduler.CyclicLR(opt1, base_lr=1e-4, max_lr=1e-3,step_size_up=step_size_up, mode='triangular2', scale_mode='cycle', cycle_momentum=False)
+
     opts = [opt0, opt1]
+    scheds = [scheduler0, scheduler1]
 
     if resume:
         if stage == 0:
             opt0.load_state_dict(
                 torch.load(
                     str(fod_optimizer_file).format(start_epoch - 1),
+                    map_location=device,
+                    weights_only=False,
+                )
+            )
+            scheduler0.load_state_dict(
+                torch.load(
+                    str(fod_scheduler_file).format(start_epoch - 1),
                     map_location=device,
                     weights_only=False,
                 )
@@ -618,11 +667,15 @@ def main():
             unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
 
             optimizer_path = str(t1_optimizer_file).format(start_epoch - 1)
+            scheduler_path = str(t1_scheduler_file).format(start_epoch - 1)
             previous_rnn_path = str(t1_rnn_file).format(start_epoch - 1)
 
-            if Path(optimizer_path).exists() and Path(previous_rnn_path).exists():
+            if Path(optimizer_path).exists() and Path(previous_rnn_path).exists() and Path(scheduler_path):
                 opt1.load_state_dict(
                     torch.load(optimizer_path, map_location=device, weights_only=False)
+                )
+                scheduler1.load_state_dict(
+                    torch.load(scheduler_path, map_location=device, weights_only=False)
                 )
                 unwrap_model(t1_rnn).load_state_dict(
                     torch.load(
@@ -657,13 +710,21 @@ def main():
 
     stage_last_epoch = start_epoch + stage_num_epochs_no_change - 1
 
+        
+    warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     epoch_bar = tqdm(
         range(start_epoch, total_max_epochs),
         leave=True,
         disable=(rank != 0),
     )
 
+
+    warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     for epoch in epoch_bar:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
+        
         if is_distributed:
             train_sampler.set_epoch(epoch)
 
@@ -688,6 +749,7 @@ def main():
             rnn_criterion,
             device,
             opts[stage],
+            scheds[stage],
             "Train",
             stage,
             scaler,
@@ -711,12 +773,15 @@ def main():
             rnn_criterion,
             device,
             opts[stage],
+            scheds[stage],
             "Validation",
             stage,
             scaler,
             use_amp,
             rank,
         )
+        if rank == 0:
+            run.report_progress(expect_next_in=1000)
         # Save and track prediction visualizations (rank 0 only, every 10 epochs)
         if rank == 0 and epoch % 8 == 0:
             viz_dir = out_dir / "visualizations"
@@ -742,17 +807,38 @@ def main():
                         t1_pred, trid.to(device), trii
                     )
 
+                fod_pred_cpu = fod_pred.detach().cpu()
+                fod_step_pred_cpu = fod_step_pred.detach().cpu()
+                step_cpu = step.detach().cpu()
+                mask_cpu = mask.detach().cpu()
+                t1_pred_cpu = t1_pred.detach().cpu() if t1_pred is not None else None
+                t1_step_pred_cpu = t1_step_pred.detach().cpu() if t1_step_pred is not None else None
+
+                # Clear GPU cache before visualization
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
                 visualize_predictions(
-                    fod_pred,
-                    fod_step_pred,
-                    step.to(device),
-                    mask.to(device),
+                    fod_pred_cpu,
+                    fod_step_pred_cpu,
+                    step_cpu,
+                    mask_cpu,
                     stage=stage,
-                    t1_pred=t1_pred,
-                    t1_step_pred=t1_step_pred,
+                    t1_pred=t1_pred_cpu,
+                    t1_step_pred=t1_step_pred_cpu,
                     save_path=viz_path,
                     epoch=epoch,
                 )
+
+                # Clear CPU memory after visualization
+                del fod_pred_cpu, fod_step_pred_cpu, step_cpu, mask_cpu
+                if t1_pred_cpu is not None:
+                    del t1_pred_cpu
+                if t1_step_pred_cpu is not None:
+                    del t1_step_pred_cpu
+                gc.collect()
+
+
 
                 # Track image with Aim
                 run.track(
@@ -859,7 +945,7 @@ def main():
                 context={"subset": "validation"},
             )
 
-        if epoch % 5 == 0 and rank == 0:
+        if epoch % 1 == 0 and rank == 0:
             if stage == 0:
                 torch.save(
                     unwrap_model(fod_cnn).state_dict(), str(fod_cnn_file).format(epoch)
@@ -868,6 +954,7 @@ def main():
                     unwrap_model(fod_rnn).state_dict(), str(fod_rnn_file).format(epoch)
                 )
                 torch.save(opt0.state_dict(), str(fod_optimizer_file).format(epoch))
+                torch.save(scheduler0.state_dict(), str(fod_scheduler_file).format(epoch))
             else:
                 torch.save(
                     unwrap_model(t1_cnn).state_dict(), str(t1_cnn_file).format(epoch)
@@ -876,6 +963,7 @@ def main():
                     unwrap_model(t1_rnn).state_dict(), str(t1_rnn_file).format(epoch)
                 )
                 torch.save(opt1.state_dict(), str(t1_optimizer_file).format(epoch))
+                torch.save(scheduler1.state_dict(), str(t1_scheduler_file).format(epoch))
 
         if val_loss - val_tolerence < best_loss:
             if val_loss < best_loss:
@@ -894,6 +982,9 @@ def main():
                         torch.save(
                             opt0.state_dict(), str(fod_optimizer_file).format("best")
                         )
+                        torch.save(
+                            scheduler0.state_dict(), str(fod_scheduler_file).format("best")
+                        )
                     else:
                         torch.save(
                             unwrap_model(t1_cnn).state_dict(),
@@ -905,6 +996,9 @@ def main():
                         )
                         torch.save(
                             opt1.state_dict(), str(t1_optimizer_file).format("best")
+                        )
+                        torch.save(
+                            scheduler1.state_dict(), str(t1_scheduler_file).format("best")
                         )
                 stage_last_epoch = np.min(
                     (
@@ -925,13 +1019,13 @@ def main():
                     torch.load(
                         str(fod_cnn_file).format("best"),
                         map_location=device,
-                        weights_only=False,
+                        weights_only=True,
                     )
                 )
                 fod_rnn_weights = torch.load(
                     str(fod_rnn_file).format("best"),
                     map_location=device,
-                    weights_only=False,
+                    weights_only=True,
                 )
                 unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
                 initialize_t1_rnn(unwrap_model(t1_rnn), fod_rnn_weights)
