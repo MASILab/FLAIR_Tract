@@ -8,6 +8,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import time
 
 # Class Definitions
 
@@ -438,6 +439,7 @@ class DetRNN(nn.Module):
         self, img, trid, trii, h=None
     ):  # Take either a packed sequence (train) or batch x feature tensor (gen) and return a (padded) seq x batch x feature tensor
         # Check input types
+        # t0 = time.time()
 
         seq = isinstance(trid, nn.utils.rnn.PackedSequence) and isinstance(
             trii, nn.utils.rnn.PackedSequence
@@ -451,7 +453,9 @@ class DetRNN(nn.Module):
         else:
             trid_data = trid
             trii_data = trii
+        # t_interp = time.time()
         z = self.interp(img, trid_data, trii_data)
+        # t_interp_done = time.time()
 
         # Embed through FC
 
@@ -503,6 +507,10 @@ class DetRNN(nn.Module):
             )
             ds, _ = nn.utils.rnn.pad_packed_sequence(ds, batch_first=False)
             x = x.data
+
+        # print(f"  Interp time: {t_interp_done - t_interp:.2f}s")
+        # print(f"  Total forward: {time.time() - t0:.2f}s")
+    
 
         return (
             ds,

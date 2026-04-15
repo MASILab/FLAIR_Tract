@@ -1,5 +1,4 @@
 import os
-=======
 # Dataset Definitions
 # Written by Leon Cai(GOAT)
 # Modified by Tian Yu

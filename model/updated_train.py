@@ -1,6 +1,8 @@
 from aim import Image as AimImage
 import matplotlib
 import gc
+import time
+
 
 matplotlib.use("Agg")  # Non-interactive backend for saving files
 import matplotlib.pyplot as plt
@@ -18,7 +20,7 @@ import warnings
 # Aim import for experiment tracking
 from aim import Run
 
-from tqdm.rich import tqdm  
+from tqdm.rich import tqdm
 from tqdm import TqdmExperimentalWarning
 import numpy as np
 import math
@@ -47,7 +49,7 @@ def maybe_wrap_ddp(model, device_ids, output_device):
             device_ids=device_ids,
             output_device=output_device,
             find_unused_parameters=True,
-            static_graph=False,
+            static_graph=True,
         )
     return model
 
@@ -106,6 +108,10 @@ def visualize_predictions(
     def normalize_for_viz(arr):
         """Normalize array to [0, 1] for visualization."""
         arr = np.asarray(arr)
+
+        if arr.size == 0:
+            return arr
+
         min_val, max_val = arr.min(), arr.max()
         if max_val - min_val > 1e-8:
             return (arr - min_val) / (max_val - min_val)
@@ -195,7 +201,7 @@ def visualize_predictions(
     plot_orthogonal_3d(axes[0], fod_pred_np[0], "FOD CNN Pred")
 
     # Row 1: FOD RNN step predictions (1D streamline - line plot or heatmap)
-    if is_fod_step_1d:
+    if is_fod_step_1d and fod_step_pred_np[0].size > 0:
         # Use line plot for directional components
         plot_streamline_components(
             axes[1, 0], fod_step_pred_np[0], "FOD RNN: X/Y/Z Components"
@@ -208,19 +214,23 @@ def visualize_predictions(
             if fod_step_pred_np[0].shape[-1] == 3
             else fod_step_pred_np[0].squeeze()
         )
-        axes[1, 2].plot(
-            np.arange(len(magnitudes)), magnitudes, color="purple", linewidth=1.5
-        )
-        axes[1, 2].set_xlabel("Streamline Step")
-        axes[1, 2].set_ylabel("Magnitude")
-        axes[1, 2].set_title("FOD RNN: Direction Magnitude")
-        axes[1, 2].grid(True, alpha=0.3)
+        if magnitudes.size > 0:
+            axes[1, 2].plot(
+                np.arange(len(magnitudes)), magnitudes, color="purple", linewidth=1.5
+            )
+            axes[1, 2].set_xlabel("Streamline Step")
+            axes[1, 2].set_ylabel("Magnitude")
+            axes[1, 2].set_title("FOD RNN: Direction Magnitude")
+            axes[1, 2].grid(True, alpha=0.3)
+        else:
+            axes[1, 2].text(0.5, 0.5, "No magnitude data", ha="center", va="center")
+            axes[1, 2].axis("off")
     else:
-        # Fallback to orthogonal slices if not 1D
+        # Fallback to orthogonal slices if not 1D or empty
         plot_orthogonal_3d(axes[1], fod_step_pred_np[0], "FOD RNN Pred")
 
     # Row 2: Ground Truth Step (same visualization as predictions for comparison)
-    if is_step_1d:
+    if is_step_1d and step_np[0].size > 0:
         plot_streamline_components(
             axes[2, 0],
             step_np[0],
@@ -228,31 +238,70 @@ def visualize_predictions(
             color_pred="red",
             color_gt="blue",
         )
-        plot_streamline_heatmap(
-            axes[2, 1], step_np[0], "Ground Truth: Heatmap")
+        plot_streamline_heatmap(axes[2, 1], step_np[0], "Ground Truth: Heatmap")
         magnitudes = (
             np.linalg.norm(step_np[0], axis=-1)
             if step_np[0].shape[-1] == 3
             else step_np[0].squeeze()
         )
-        axes[2, 2].plot(
-            np.arange(len(magnitudes)), magnitudes, color="orange", linewidth=1.5
-        )
-        axes[2, 2].set_xlabel("Streamline Step")
-        axes[2, 2].set_ylabel("Magnitude")
-        axes[2, 2].set_title("Ground Truth: Direction Magnitude")
-        axes[2, 2].grid(True, alpha=0.3)
+        if magnitudes.size > 0:
+            axes[2, 2].plot(
+                np.arange(len(magnitudes)), magnitudes, color="orange", linewidth=1.5
+            )
+            axes[2, 2].set_xlabel("Streamline Step")
+            axes[2, 2].set_ylabel("Magnitude")
+            axes[2, 2].set_title("Ground Truth: Direction Magnitude")
+            axes[2, 2].grid(True, alpha=0.3)
+        else:
+            axes[2, 2].text(0.5, 0.5, "No magnitude data", ha="center", va="center")
+            axes[2, 2].axis("off")
     else:
         plot_orthogonal_3d(axes[2], step_np[0], "Ground Truth Step")
 
     # Row 3: T1 predictions (Stage 1 only) or mask
     if stage == 1 and t1_pred is not None:
-        plot_orthogonal_3d(axes[3], t1_pred_np[0], "T1 CNN Pred")
+        if (
+            is_t1_step_1d
+            and t1_step_pred_np is not None
+            and t1_step_pred_np[0].size > 0
+        ):
+            # T1 RNN step predictions (1D streamline - line plot or heatmap)
+            # Use line plot for directional components
+            plot_streamline_components(
+                axes[3, 0], t1_step_pred_np[0], "T1 RNN: X/Y/Z Components"
+            )
+            # Use heatmap for intensity view
+            plot_streamline_heatmap(axes[3, 1], t1_step_pred_np[0], "T1 RNN: Heatmap")
+            # Show magnitude
+            magnitudes = (
+                np.linalg.norm(t1_step_pred_np[0], axis=-1)
+                if t1_step_pred_np[0].shape[-1] == 3
+                else t1_step_pred_np[0].squeeze()
+            )
+            if magnitudes.size > 0:
+                axes[3, 2].plot(
+                    np.arange(len(magnitudes)), magnitudes, color="teal", linewidth=1.5
+                )
+                axes[3, 2].set_xlabel("Streamline Step")
+                axes[3, 2].set_ylabel("Magnitude")
+                axes[3, 2].set_title("T1 RNN: Direction Magnitude")
+                axes[3, 2].grid(True, alpha=0.3)
+            else:
+                axes[3, 2].text(0.5, 0.5, "No magnitude data", ha="center", va="center")
+                axes[3, 2].axis("off")
+        else:
+            # Fallback: Show T1 CNN orthogonal slices if no RNN step data
+            plot_orthogonal_3d(axes[3], t1_pred_np[0], "T1 CNN Pred")
     else:
         for col in range(3):
             axes[3, col].text(
-                0.5, 0.5, f"Stage 0\nMask: {mask_np[0].shape}", 
-                ha="center", va="center", fontsize=12, style="italic"
+                0.5,
+                0.5,
+                f"Stage 0\nMask: {mask_np[0].shape}",
+                ha="center",
+                va="center",
+                fontsize=12,
+                style="italic",
             )
             axes[3, col].axis("off")
 
@@ -268,10 +317,8 @@ def visualize_predictions(
         del t1_pred_np
     if t1_step_pred_np is not None:
         del t1_step_pred_np
-    
+
     gc.collect()
-    
-    return save_path
 
     return save_path
 
@@ -315,7 +362,8 @@ def epoch_losses(
     Returns:
         Tuple of average losses.
     """
-    
+    # epoch_start = time.time()
+
     warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     train = "train" in label.lower()
 
@@ -331,47 +379,46 @@ def epoch_losses(
     show_batch_progress = rank == 0
 
     if train:
-            optimizer.zero_grad(set_to_none=True)
-            if stage == 0:
-                fod_cnn.train()
-                fod_rnn.train()
-            else:
-                fod_cnn.eval()
-                fod_rnn.eval()
-                for param in fod_cnn.parameters():
-                    param.requires_grad = False
-                for param in fod_rnn.parameters():
-                    param.requires_grad = False
-                t1_cnn.train()
-                t1_rnn.train()
-    else:
+        optimizer.zero_grad(set_to_none=True)
+        if stage == 0:
+            fod_cnn.train()
+            fod_rnn.train()
+        else:
             fod_cnn.eval()
-            t1_cnn.eval()
             fod_rnn.eval()
-            t1_rnn.eval()
+            for param in fod_cnn.parameters():
+                param.requires_grad = False
+            for param in fod_rnn.parameters():
+                param.requires_grad = False
+            t1_cnn.train()
+            t1_rnn.train()
+    else:
+        fod_cnn.eval()
+        t1_cnn.eval()
+        fod_rnn.eval()
+        t1_rnn.eval()
 
     if stage == 0:
 
-            def loss_fxn(
-                fod_dot_loss,
-                fod_cum_loss,
-                t1_dot_loss,
-                t1_cum_loss,
-                fc_loss,
-            ):
-                return fod_dot_loss
+        def loss_fxn(
+            fod_dot_loss,
+            fod_cum_loss,
+            t1_dot_loss,
+            t1_cum_loss,
+            fc_loss,
+        ):
+            return fod_dot_loss
 
     else:
 
-            def loss_fxn(
-                fod_dot_loss,
-                fod_cum_loss,
-                t1_dot_loss,
-                t1_cum_loss,
-                fc_loss,
-            ):
-                return fc_loss + t1_dot_loss
-
+        def loss_fxn(
+            fod_dot_loss,
+            fod_cum_loss,
+            t1_dot_loss,
+            t1_cum_loss,
+            fc_loss,
+        ):
+            return fc_loss + t1_dot_loss
 
     if train and use_amp:
         ctx_fod = autocast(device_type="cuda")
@@ -380,7 +427,6 @@ def epoch_losses(
     else:
         ctx_fod = default_context()
 
-        
     if stage == 1:
         if train and use_amp:
             ctx_t1 = autocast(device_type="cuda")
@@ -388,17 +434,22 @@ def epoch_losses(
             ctx_t1 = default_context()
         else:
             ctx_t1 = torch.no_grad()
-    
+
     warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
-    for _, dt1_item in tqdm(
+    batch_times = []
+    for bidx, dt1_item in tqdm(
         enumerate(data_loader),
         total=epoch_iters,
         desc=label,
         leave=False,
         disable=not show_batch_progress,
     ):
+        # batch_start = time.time()
+        # ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
+        # t_load_start = time.time()
         ten_2mm, fod, brain, step, trid, trii, mask = unload(*dt1_item)
-
+        # t_load_done = time.time()
+        # t_fwd_start = time.time()
 
         with ctx_fod:
             fod_pred = fod_cnn(fod.to(device))
@@ -410,9 +461,16 @@ def epoch_losses(
             t1_dot_loss = torch.Tensor([0]).detach()
             t1_cum_loss = torch.Tensor([0]).detach()
             fc_loss = torch.Tensor([0]).detach()
+        # t_fwd_done = time.time()
 
+        # t_t1_fwd_start = time.time()
         if stage == 1:
             with ctx_t1:
+                if train and use_amp:
+                    amp_status = (
+                        "ENABLED" if torch.is_autocast_enabled() else "NOT ENABLED"
+                    )
+                    # print(f"[DEBUG] AMP for T1: {amp_status}")
                 t1_pred = t1_cnn(ten_2mm.to(device))
                 t1_step_pred, _, _, _, t1_fc = t1_rnn(t1_pred, trid.to(device), trii)
                 t1_dot_loss, t1_cum_loss = rnn_criterion(
@@ -428,6 +486,9 @@ def epoch_losses(
             fc_loss,
         )
 
+        # t_t1_fwd_done = time.time()
+
+        # t_bwd_start = time.time()
         if train:
             if use_amp:
                 scaler.scale(loss).backward()
@@ -438,7 +499,7 @@ def epoch_losses(
                 optimizer.step()
 
             scheduler.step()
-            
+        # t_bwd_done = time.time()
 
         epoch_loss += loss.item()
         epoch_fod_dot_loss += fod_dot_loss.item()
@@ -446,14 +507,28 @@ def epoch_losses(
         epoch_t1_dot_loss += t1_dot_loss.item()
         epoch_t1_cum_loss += t1_cum_loss.item()
         epoch_fc_loss += fc_loss.item()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            _ = gc.collect()
 
-        
+        # batch_time = time.time() - batch_start
+        # print(f"[{label}] Batch {bidx}: \n",
+        #       f"Load={t_load_done-t_load_start:.2f}s | \n",
+        #       f"FWD={t_fwd_done-t_fwd_start:.2f}s | \n",
+        #       f"T1_FWD={t_t1_fwd_done-t_t1_fwd_start:.2f}s | \n",
+        #       f"BWD={t_bwd_done-t_bwd_start:.2f}s | \n",
+        #       f"TOTAL={batch_time:.2f}s")
+
     epoch_loss /= epoch_iters
     epoch_fod_dot_loss /= epoch_iters
     epoch_fod_cum_loss /= epoch_iters
     epoch_t1_dot_loss /= epoch_iters
     epoch_t1_cum_loss /= epoch_iters
     epoch_fc_loss /= epoch_iters
+
+    # epoch_time = time.time() - epoch_start
+    # avg_batch_time = np.mean(batch_times)
+    # print(f"[{label}]: avg batch: {avg_batch_time:.2f}s")
 
     return (
         epoch_loss,
@@ -513,6 +588,7 @@ def main():
     resume = config.getboolean("resume")
     start_epoch = config.getint("start_epoch")
     best_fod_epoch = config.getint("best_fod_epoch")
+    best_t1_epoch = config.getint("best_t1_epoch")
     stage = config.getint("stage")
 
     stage_max_epochs = config.getint("stage_max_epochs")
@@ -554,8 +630,18 @@ def main():
     with open(val_dirs_file, "r") as file:
         val_dirs = file.read().splitlines()
 
-    train_dataset = DT1Dataset(train_dirs, num_batches, cache_root=cache_root + "_train", base_data_path=derivatives_data_path)
-    val_dataset = DT1Dataset(val_dirs, num_batches, cache_root=cache_root + "_val", base_data_path=derivatives_data_path)
+    train_dataset = DT1Dataset(
+        train_dirs,
+        num_batches,
+        cache_root=cache_root + "_train",
+        base_data_path=derivatives_data_path,
+    )
+    val_dataset = DT1Dataset(
+        val_dirs,
+        num_batches,
+        cache_root=cache_root + "_val",
+        base_data_path=derivatives_data_path,
+    )
 
     if is_distributed:
         train_sampler = DistributedSampler(
@@ -568,12 +654,16 @@ def main():
             train_dataset,
             batch_size=1,
             sampler=train_sampler,
-            num_workers=1,
+            num_workers=3,
             drop_last=True,
-            persistent_workers=False
+            persistent_workers=False,
         )
         val_loader = DataLoader(
-            val_dataset, batch_size=1, sampler=val_sampler, num_workers=1, persistent_workers=False
+            val_dataset,
+            batch_size=1,
+            sampler=val_sampler,
+            num_workers=1,
+            persistent_workers=False,
         )
     else:
         train_loader = DataLoader(
@@ -585,7 +675,7 @@ def main():
     fod_rnn = DetRNN(45, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(
         device
     )
-    t1_cnn = DetConvProj(123, 512, kernel_size=7).to(device)
+    t1_cnn = DetConvProj(123, 512, kernel_size=3).to(device)
     t1_rnn = DetRNN(512, fc_width=512, fc_depth=4, rnn_width=512, rnn_depth=2).to(
         device
     )
@@ -610,14 +700,30 @@ def main():
     opt0 = optim.AdamW(
         list(fod_cnn.parameters()) + list(fod_rnn.parameters()), lr=3e-4, eps=1e-6
     )
-    scheduler0 = torch.optim.lr_scheduler.CyclicLR(opt0, base_lr=1e-4, max_lr=1e-3, step_size_up=step_size_up, mode='triangular2', scale_mode='cycle', cycle_momentum=False)
+    scheduler0 = torch.optim.lr_scheduler.CyclicLR(
+        opt0,
+        base_lr=1e-4,
+        max_lr=1e-3,
+        step_size_up=step_size_up,
+        mode="triangular2",
+        scale_mode="cycle",
+        cycle_momentum=False,
+    )
 
     opt1 = optim.AdamW(
         list(t1_cnn.parameters()) + list(unwrap_model(t1_rnn).fc.parameters()),
         lr=3e-4,
         eps=1e-6,
     )
-    scheduler1 = torch.optim.lr_scheduler.CyclicLR(opt1, base_lr=1e-4, max_lr=1e-3,step_size_up=step_size_up, mode='triangular2', scale_mode='cycle', cycle_momentum=False)
+    scheduler1 = torch.optim.lr_scheduler.CyclicLR(
+        opt1,
+        base_lr=1e-4,
+        max_lr=1e-3,
+        step_size_up=step_size_up,
+        mode="triangular2",
+        scale_mode="cycle",
+        cycle_momentum=False,
+    )
 
     opts = [opt0, opt1]
     scheds = [scheduler0, scheduler1]
@@ -656,21 +762,28 @@ def main():
                 torch.load(
                     str(fod_cnn_file).format(best_fod_epoch),
                     map_location=device,
-                    weights_only=False,
+                    weights_only=True,
                 )
             )
             fod_rnn_weights = torch.load(
                 str(fod_rnn_file).format(best_fod_epoch),
                 map_location=device,
-                weights_only=False,
+                weights_only=True,
             )
             unwrap_model(fod_rnn).load_state_dict(fod_rnn_weights)
 
-            optimizer_path = str(t1_optimizer_file).format(start_epoch - 1)
-            scheduler_path = str(t1_scheduler_file).format(start_epoch - 1)
-            previous_rnn_path = str(t1_rnn_file).format(start_epoch - 1)
+            # optimizer_path = str(t1_optimizer_file).format(start_epoch - 1)
+            # scheduler_path = str(t1_scheduler_file).format(start_epoch - 1)
+            # previous_rnn_path = str(t1_rnn_file).format(start_epoch - 1)
+            optimizer_path = str(t1_optimizer_file).format(best_t1_epoch)
+            scheduler_path = str(t1_scheduler_file).format(best_t1_epoch)
+            previous_rnn_path = str(t1_rnn_file).format(best_t1_epoch)
 
-            if Path(optimizer_path).exists() and Path(previous_rnn_path).exists() and Path(scheduler_path):
+            if (
+                Path(optimizer_path).exists()
+                and Path(previous_rnn_path).exists()
+                and Path(scheduler_path)
+            ):
                 opt1.load_state_dict(
                     torch.load(optimizer_path, map_location=device, weights_only=False)
                 )
@@ -710,7 +823,6 @@ def main():
 
     stage_last_epoch = start_epoch + stage_num_epochs_no_change - 1
 
-        
     warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     epoch_bar = tqdm(
         range(start_epoch, total_max_epochs),
@@ -718,13 +830,12 @@ def main():
         disable=(rank != 0),
     )
 
-
     warnings.simplefilter("ignore", category=TqdmExperimentalWarning)
     for epoch in epoch_bar:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             gc.collect()
-        
+
         if is_distributed:
             train_sampler.set_epoch(epoch)
 
@@ -780,10 +891,8 @@ def main():
             use_amp,
             rank,
         )
-        if rank == 0:
-            run.report_progress(expect_next_in=1000)
         # Save and track prediction visualizations (rank 0 only, every 10 epochs)
-        if rank == 0 and epoch % 8 == 0:
+        if False: #  rank == 0 and epoch % 8 == 0:
             viz_dir = out_dir / "visualizations"
             viz_dir.mkdir(exist_ok=True)
             viz_path = viz_dir / f"predictions_epoch_{epoch}.png"
@@ -812,7 +921,9 @@ def main():
                 step_cpu = step.detach().cpu()
                 mask_cpu = mask.detach().cpu()
                 t1_pred_cpu = t1_pred.detach().cpu() if t1_pred is not None else None
-                t1_step_pred_cpu = t1_step_pred.detach().cpu() if t1_step_pred is not None else None
+                t1_step_pred_cpu = (
+                    t1_step_pred.detach().cpu() if t1_step_pred is not None else None
+                )
 
                 # Clear GPU cache before visualization
                 if torch.cuda.is_available():
@@ -838,8 +949,6 @@ def main():
                     del t1_step_pred_cpu
                 gc.collect()
 
-
-
                 # Track image with Aim
                 run.track(
                     AimImage(str(viz_path)),
@@ -854,6 +963,11 @@ def main():
         val_t1_ang_loss = dot2ang(val_t1_dot_loss)
 
         if rank == 0:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+
+
             run.track(
                 train_loss, name="Total Loss", step=epoch, context={"subset": "train"}
             )
@@ -954,7 +1068,9 @@ def main():
                     unwrap_model(fod_rnn).state_dict(), str(fod_rnn_file).format(epoch)
                 )
                 torch.save(opt0.state_dict(), str(fod_optimizer_file).format(epoch))
-                torch.save(scheduler0.state_dict(), str(fod_scheduler_file).format(epoch))
+                torch.save(
+                    scheduler0.state_dict(), str(fod_scheduler_file).format(epoch)
+                )
             else:
                 torch.save(
                     unwrap_model(t1_cnn).state_dict(), str(t1_cnn_file).format(epoch)
@@ -963,7 +1079,9 @@ def main():
                     unwrap_model(t1_rnn).state_dict(), str(t1_rnn_file).format(epoch)
                 )
                 torch.save(opt1.state_dict(), str(t1_optimizer_file).format(epoch))
-                torch.save(scheduler1.state_dict(), str(t1_scheduler_file).format(epoch))
+                torch.save(
+                    scheduler1.state_dict(), str(t1_scheduler_file).format(epoch)
+                )
 
         if val_loss - val_tolerence < best_loss:
             if val_loss < best_loss:
@@ -983,7 +1101,8 @@ def main():
                             opt0.state_dict(), str(fod_optimizer_file).format("best")
                         )
                         torch.save(
-                            scheduler0.state_dict(), str(fod_scheduler_file).format("best")
+                            scheduler0.state_dict(),
+                            str(fod_scheduler_file).format("best"),
                         )
                     else:
                         torch.save(
@@ -998,7 +1117,8 @@ def main():
                             opt1.state_dict(), str(t1_optimizer_file).format("best")
                         )
                         torch.save(
-                            scheduler1.state_dict(), str(t1_scheduler_file).format("best")
+                            scheduler1.state_dict(),
+                            str(t1_scheduler_file).format("best"),
                         )
                 stage_last_epoch = np.min(
                     (
