@@ -14,6 +14,7 @@ with open("rdsr.yaml", "r") as config:
 atlases_pattern = conf["atlases_pattern"]
 wb_trk_template = conf["wb_trk_template"]
 script_path = conf["script_path"]
+modality = conf["modality"]
 
 
 def run_dipy_slr_recobundles(
@@ -71,6 +72,7 @@ def run_dipy_slr_recobundles(
         wb_trk_template,
         "{}",
         atlases_pattern,
+        modality
     ]
 
     parallel_cmd = parallel[parallel_args]

@@ -92,18 +92,18 @@ d = {
         "sub-{subject}/ses-{session}/parsed_SDStream_seeds.txt",
         "sub-{subject}/ses-{session}/SDStream_seeds.tck",
     ],
-    "transform_tractograms_to_t1_output": [
-        "sub-{subject}/ses-{session}/T1_test50to250_no_remove.trk",
-        "sub-{subject}/ses-{session}/T1_SDStream_seeds.trk",
-        "sub-{subject}/ses-{session}/T1_test50to250.trk",
-    ],
-    "transform_tractograms_to_mni_outputs": [
-        "sub-{subject}/ses-{session}/T1_test50to250_mni_no_remove.trk",
-        "sub-{subject}/ses-{session}/T1_SDStream_seeds_mni.trk",
-        "sub-{subject}/ses-{session}/T1_test50to250_mni.trk",
-    ],
-    "compute_tdi_outputs": ["sub-{subject}/ses-{session}/T1_mni_tdi.nii.gz"],
-    "compute_model_to_sub_mat_outputs": ["sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm0GenericAffine.mat"],
+    # "transform_tractograms_to_t1_output": [
+    #     "sub-{subject}/ses-{session}/T1_test50to250_no_remove.trk",
+    #     "sub-{subject}/ses-{session}/T1_SDStream_seeds.trk",
+    #     "sub-{subject}/ses-{session}/T1_test50to250.trk",
+    # ],
+    # "transform_tractograms_to_mni_outputs": [
+    #     "sub-{subject}/ses-{session}/T1_test50to250_mni_no_remove.trk",
+    #     "sub-{subject}/ses-{session}/T1_SDStream_seeds_mni.trk",
+    #     "sub-{subject}/ses-{session}/T1_test50to250_mni.trk",
+    # ],
+    # "compute_tdi_outputs": ["sub-{subject}/ses-{session}/T1_mni_tdi.nii.gz"],
+    # "compute_model_to_sub_mat_outputs": ["sub-{subject}/ses-{session}/bundleseg/model_to_sub_tfm0GenericAffine.mat"],
     # "bundleseg_outputs": [
     #     "sub-{subject}/ses-{session}/bundleseg/logfile.txt",
     #     "sub-{subject}/ses-{session}/bundleseg/results.json",
@@ -200,7 +200,7 @@ def output_prefix(wildcards):
 rule resample_dwmri:
     input:
         dwi=get_dwi_inputs,
-    threads: 16
+    threads: 1
     output:
         DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz",
         # expand(DERIVATIVES / "sub-{subject}/ses-{session}/dwmri_1mmiso.nii.gz", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
@@ -209,11 +209,11 @@ rule resample_dwmri:
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log",
         # expand(DERIVATIVES / "logs/sub-{subject}/ses-{session}/resample_dwmri.log", zip, subject=VALID_SUBJECTS, session=VALID_SESSIONS)
-    params:
-        ref=template,
+    # params:
+    #     ref=template,
     shell:
         """
-            flirt -in {input.dwi} -ref {params.ref} -out {output} -applyisoxfm 1.0
+            flirt -in {input.dwi} -ref {input.dwi} -out {output} -applyisoxfm 1.0 -interp trilinear -usesqform
         """
 
 
@@ -230,7 +230,7 @@ rule compute_b0:
         container=MRTRIX,
         derivatives=DERIVATIVES
     resources:
-        io=1 
+        io=8 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/compute_b0.log",
     container:
@@ -243,7 +243,7 @@ rule compute_b0:
 
         # Run pipeline with proper logging
         apptainer exec -ce -B /tmp -B {params.base_dir} -B $(dirname {output.b0}) -B {params.derivatives} \\
-        {params.container} dwiextract {input.dwi} -fslgrad {input.bvec} \\
+        {params.container} dwiextract -nthreads 8 {input.dwi} -fslgrad {input.bvec} \\
         {input.bval} - -bzero 2>> {log} | apptainer exec -ce -B /tmp -B {params.base_dir} -B $(dirname \\
         {output.b0}) -B {params.derivatives} {params.container} mrmath -in - mean {output.b0} -axis 3 \\
         2>> {log}
@@ -376,7 +376,7 @@ rule fit_fod:
         itk_threads=itk_thread_count,
         derivatives=DERIVATIVES
     resources:
-        io=1 
+        io=16 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/fit_fod.log",
     container:
@@ -398,7 +398,7 @@ rule fit_fod:
         # Fit FOD
         apptainer exec -B {params.base_dir} -B $(dirname {input.dwi}) -B {params.derivatives} \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
-        {params.container} dwi2fod csd {input.dwi} {output.response} \\
+        {params.container} dwi2fod -nthreads {params.itk_threads} csd {input.dwi} {output.response} \\
         {output.fod} -fslgrad {input.bvec} {input.bval} \\
         -mask {input.dwi_mask} 2>> {log}
         """
@@ -536,7 +536,7 @@ rule run_tractography:
         container=MRTRIX,
         itk_threads=8,
     resources:
-        io=1 
+        io=8 
     log:
         DERIVATIVES / "logs/sub-{subject}/ses-{session}/run_tractography.log",
     container:
@@ -553,7 +553,7 @@ rule run_tractography:
         -algorithm SD_Stream -select 1000000 -step .1 -seed_image \\
         {input.dwi_seed} -seed_gmwmi {input.dwi_gmwmi} -crop_at_gmwmi \\
         -mask {input.dwi_mask} -minlength 50 -act {input.dwi_5tt} \\
-        -output_seeds {output.seeds_txt} -info -force 2>> {log}
+        -output_seeds {output.seeds_txt} -info -nthreads {params.itk_threads} -force 2>> {log}
 
         # Parse seeds file with error checking
         if [ -f {output.seeds_txt} ]; then
@@ -566,7 +566,7 @@ rule run_tractography:
         fi
 
         # Convert to TCK format with proper bind mounts
-        apptainer exec -B {params.base_dir} -B {params.derivatives} \\
+        apptainer exec -B {params.base_dir} -B {params.derivatives} \1\
         -B $(dirname {output.seeds_parsed}) -B $(dirname {output.seeds_tck}) \\
         --env "ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS={params.itk_threads}" \\
         {params.container} tckconvert {output.seeds_parsed} \\

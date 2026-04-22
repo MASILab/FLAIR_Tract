@@ -11,7 +11,8 @@ export IPYTHONDIR="/fs5/p_masi/schwat1/venv_configs_for_fs5/.local/.ipython"
 export pybin=/fs5/p_masi/schwat1/spie_flair_tract_extension/.venv/bin/python
 export generate_script=/fs5/p_masi/schwat1/spie_flair_tract_extension/model/generate.py
 data_dir=/valiant02/masi/schwat1/projects/spie_flair_tract_extension/FLAIR_processing/BIDS_format/derivatives
-job_log="$data_dir/inference_job.log"
+job_log="$data_dir/FLAIR_TRACT_inference_job.log"
+path_file=/fs5/p_masi/schwat1/spie_flair_tract_extension/model/valid_inference_subjects.txt
 
 fdfind fod_mni_trix "$data_dir" --absolute-path | while read -r file_path; do
 	dir_path=$(dirname "$file_path")
@@ -37,4 +38,4 @@ run_ft_inference() {
 
 export -f run_ft_inference
 
-parallel --env _ --progress --joblog "$job_log" --resume -j3 run_ft_inference {%} {} :::: "$data_dir"/subj_for_inference.txt
+parallel --env _ --progress --joblog "$job_log" --resume -j3 run_ft_inference {%} {} :::: "$path_file"
